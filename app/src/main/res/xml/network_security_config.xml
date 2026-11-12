@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Por defecto TODO el tráfico debe ir cifrado (HTTPS/TLS).
+    Excepción: el ESP32 de la red local, que no tiene certificado. Sus mensajes van firmados con
+    HMAC-SHA256 (integridad y autenticidad) y los comandos usan un nonce de un solo uso (anti-repetición).
+
+    Si cambias la IP fija del ESP32 en el sketch, cámbiala también aquí.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.1.200</domain>
+    </domain-config>
+</network-security-config>
