@@ -68,7 +68,7 @@ private val Filtros = listOf(
     Filtro("Entradas", setOf("LOGIN", "SESION", "RECUPERAR", "USUARIO")),
     Filtro("Órdenes", setOf("COMANDO")),
     Filtro("Visitas", setOf("INVITADO")),
-    Filtro("Ajustes", setOf("AJUSTES")),
+    Filtro("Ajustes", setOf("AJUSTES", "NUBE")),
 )
 
 private fun etiquetaAccion(a: String) = when (a) {
@@ -79,6 +79,7 @@ private fun etiquetaAccion(a: String) = when (a) {
     "COMANDO" -> "Orden"
     "INVITADO" -> "Visita"
     "AJUSTES" -> "Ajustes"
+    "NUBE" -> "Nube"
     else -> a
 }
 

@@ -58,6 +58,8 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import com.invernadero.Contenedor
 import com.invernadero.conexion.Comandos
+import com.invernadero.conexion.haceCuanto
+import com.invernadero.conexion.textoCorto
 import com.invernadero.conexion.ParametrosControl
 import com.invernadero.datos.Usuario
 import com.invernadero.ui.Dato
@@ -65,6 +67,9 @@ import com.invernadero.ui.Encabezado
 import com.invernadero.ui.OpcionRadio
 import com.invernadero.ui.PildoraEstado
 import com.invernadero.ui.Seccion
+import com.invernadero.ui.mostrar
+import com.invernadero.ui.rememberPedido
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -110,27 +115,43 @@ fun PantallaControles(c: Contenedor, u: Usuario) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Encabezado("Controles", "Maneja el invernadero ahora o define cómo debe cuidarse solo. Todo queda registrado a tu nombre.") {
-                PildoraEstado(
-                    "${estado.descripcion} · " + if (estado.conectado) "conectado" else (estado.mensaje ?: "sin conexión"),
-                    ok = estado.conectado
-                )
+                PildoraEstado(estado.textoCorto(), ok = estado.conectado && !estado.desdeNube)
             }
             if (enviando) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (estado.desdeNube) Seccion("Mirando desde la nube") {
+                Text(
+                    "El último dato llegó ${haceCuanto(estado.nubeTs)}. Desde la nube solo se mira: para mover el ventilador " +
+                        "o la ventana, conéctate a la red del invernadero (WiFi o Bluetooth en Ajustes).",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Lo pedido se ve al instante (sin volver al valor anterior mientras el ESP32 confirma)
+            val pedidoAuto = rememberPedido<Boolean>()
+            val pedidoEncendido = rememberPedido<Boolean>()
+            val pedidoPwm = rememberPedido<Float>()
+            val pedidoApertura = rememberPedido<Float>()
+            fun pedir(vararg codigos: String, deshacer: () -> Unit) = enviar(*codigos) { ok -> if (!ok) deshacer() }
 
             // ── Modo (RadioButtons) ──
-            val automatico = lectura?.let { it.modoVentilador == "AUTO" && it.modoVentana == "AUTO" } ?: true
+            val automatico = pedidoAuto.mostrar(lectura?.let { it.modoVentilador == "AUTO" && it.modoVentana == "AUTO" } ?: true)
             Seccion("Modo de control") {
                 Column(Modifier.selectableGroup()) {
                     OpcionRadio("Automático", automatico, !enviando, "El ESP32 decide con tus reglas (más abajo)") {
-                        if (!automatico) enviar(Comandos.AUTOMATICO)
+                        if (!automatico) {
+                            pedidoAuto.valor = true
+                            pedir(Comandos.AUTOMATICO) { pedidoAuto.valor = null }
+                        }
                     }
                     OpcionRadio("Manual", !automatico, !enviando, "Fija el estado actual; luego usa los controles") {
                         val l = lectura
                         if (automatico && l != null) {
-                            enviar(
+                            pedidoAuto.valor = false
+                            pedir(
                                 Comandos.velocidad((l.velocidadVentilador * 255).roundToInt()),
                                 Comandos.ventana(l.anguloVentana.roundToInt())
-                            )
+                            ) { pedidoAuto.valor = null }
                         }
                     }
                 }
@@ -138,45 +159,56 @@ fun PantallaControles(c: Contenedor, u: Usuario) {
 
             // ── Ventilador (Switch + Slider + botones) ──
             var pwmArrastrado by remember { mutableStateOf<Float?>(null) }
-            val pwmReal = (lectura?.velocidadVentilador ?: 0f) * 255f
-            val pwm = pwmArrastrado ?: pwmReal
+            val pwmConfirmado = pedidoPwm.mostrar((lectura?.velocidadVentilador ?: 0f) * 255f) { a, b -> abs(a - b) <= 3f }
+            val pwm = pwmArrastrado ?: pwmConfirmado
+            val encendido = pedidoEncendido.mostrar(lectura?.ventiladorEncendido == true)
+            fun pedirPwm(objetivo: Float, codigo: String) {
+                pedidoPwm.valor = objetivo.coerceIn(0f, 255f)
+                pedidoEncendido.valor = objetivo > 0f
+                pedir(codigo) { pedidoPwm.valor = null; pedidoEncendido.valor = null }
+            }
             Seccion("Ventilador", subtitulo = "Modo ${(lectura?.modoVentilador ?: "—").lowercase()}") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (lectura?.ventiladorEncendido == true) "Encendido" else "Apagado", Modifier.weight(1f))
+                    Text(if (encendido) "Encendido" else "Apagado", Modifier.weight(1f))
                     Switch(
-                        checked = lectura?.ventiladorEncendido == true,
-                        onCheckedChange = { enviar(if (it) Comandos.MAXIMO else Comandos.APAGAR) },
+                        checked = encendido,
+                        onCheckedChange = { pedirPwm(if (it) 255f else 0f, if (it) Comandos.MAXIMO else Comandos.APAGAR) },
                         enabled = !enviando && lectura != null
                     )
                 }
-                Dato("Velocidad (PWM)", "${pwm.roundToInt()} / 255  ·  ${(pwm / 2.55f).roundToInt()}%")
+                Dato("Velocidad", "${(pwm / 2.55f).roundToInt()}%")
                 Slider(
                     value = pwm,
                     onValueChange = { pwmArrastrado = it },
                     onValueChangeFinished = {
-                        pwmArrastrado?.let { enviar(Comandos.velocidad(it.roundToInt())) }
+                        pwmArrastrado?.let { pedirPwm(it, Comandos.velocidad(it.roundToInt())) }
                         pwmArrastrado = null
                     },
                     valueRange = 0f..255f,
                     enabled = !enviando && lectura != null
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { enviar(Comandos.BAJAR) }, enabled = !enviando) { Text("Bajar") }
-                    OutlinedButton(onClick = { enviar(Comandos.SUBIR) }, enabled = !enviando) { Text("Subir") }
-                    FilledTonalButton(onClick = { enviar(Comandos.MAXIMO) }, enabled = !enviando) { Text("Máximo") }
+                    OutlinedButton(onClick = { pedirPwm(pwm - 25f, Comandos.BAJAR) }, enabled = !enviando) { Text("Bajar") }
+                    OutlinedButton(onClick = { pedirPwm(pwm + 25f, Comandos.SUBIR) }, enabled = !enviando) { Text("Subir") }
+                    FilledTonalButton(onClick = { pedirPwm(255f, Comandos.MAXIMO) }, enabled = !enviando) { Text("Máximo") }
                 }
             }
 
             // ── Ventana (Slider + botones) ──
             var aperturaArrastrada by remember { mutableStateOf<Float?>(null) }
-            val apertura = aperturaArrastrada ?: (lectura?.anguloVentana ?: 0f)
+            val aperturaConfirmada = pedidoApertura.mostrar(lectura?.anguloVentana ?: 0f) { a, b -> abs(a - b) <= 2f }
+            val apertura = aperturaArrastrada ?: aperturaConfirmada
+            fun pedirApertura(objetivo: Float, codigo: String) {
+                pedidoApertura.valor = objetivo
+                pedir(codigo) { pedidoApertura.valor = null }
+            }
             Seccion("Ventana", subtitulo = "Modo ${(lectura?.modoVentana ?: "—").lowercase()}") {
                 Dato("Apertura", "${apertura.roundToInt()}° de 90°")
                 Slider(
                     value = apertura,
                     onValueChange = { aperturaArrastrada = it },
                     onValueChangeFinished = {
-                        aperturaArrastrada?.let { enviar(Comandos.ventana(it.roundToInt())) }
+                        aperturaArrastrada?.let { pedirApertura(it, Comandos.ventana(it.roundToInt())) }
                         aperturaArrastrada = null
                     },
                     valueRange = 0f..90f,
@@ -184,8 +216,8 @@ fun PantallaControles(c: Contenedor, u: Usuario) {
                     enabled = !enviando && lectura != null
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { enviar(Comandos.CERRAR) }, enabled = !enviando) { Text("Cerrar") }
-                    Button(onClick = { enviar(Comandos.ABRIR) }, enabled = !enviando) { Text("Abrir") }
+                    OutlinedButton(onClick = { pedirApertura(0f, Comandos.CERRAR) }, enabled = !enviando) { Text("Cerrar") }
+                    Button(onClick = { pedirApertura(90f, Comandos.ABRIR) }, enabled = !enviando) { Text("Abrir") }
                 }
             }
 

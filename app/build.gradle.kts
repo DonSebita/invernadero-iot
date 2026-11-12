@@ -1,6 +1,8 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    // Lee app/google-services.json (se descarga desde la consola de Firebase)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -57,4 +59,14 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.4")
     implementation("androidx.compose.material:material-icons-core:1.7.8")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // --- Nube: Firebase Authentication + Realtime Database (modelo híbrido) ---
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.database)
+    implementation(libs.kotlinx.coroutines.play.services)   // await() para las tareas de Firebase
+    // "Continuar con Google" con Credential Manager (API recomendada por Android)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.google.id)
 }

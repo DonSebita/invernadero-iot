@@ -6,7 +6,8 @@ enum class ModoConexion(val etiqueta: String, val ayuda: String) {
     SIMULADOR("Simulador", "Datos de prueba, sin hardware"),
     WIFI("WiFi → ESP32", "Misma red WiFi que el ESP32 (más alcance, varios teléfonos)"),
     BLUETOOTH("Bluetooth → ESP32", "Directo y sin router (corto alcance, ~10 m)"),
-    REMOTO("Otro teléfono (central)", "Recibe los datos desde el teléfono central por WiFi")
+    REMOTO("Otro teléfono (central)", "Recibe los datos desde el teléfono central por WiFi"),
+    NUBE("Desde la nube", "Lo último que subió el ESP32 a Firebase (cada 2 min), desde cualquier lugar. Solo mirar")
 }
 
 data class ConfigConexion(
@@ -35,6 +36,9 @@ class AjustesRepo(private val caja: CajaFuerte) {
         )
     }
 
+    /** false = nunca se guardó la conexión en este teléfono (p. ej. un segundo teléfono recién instalado). */
+    val configurado: Boolean get() = caja.leer("modo") != null
+
     fun guardar(c: ConfigConexion) {
         caja.guardar("modo", c.modo.name)
         caja.guardar("ipEsp32", c.ipEsp32.trim())
@@ -48,4 +52,26 @@ class AjustesRepo(private val caja: CajaFuerte) {
     var modoTarde: Boolean
         get() = caja.leer("modoTarde") == "1"
         set(v) = caja.guardar("modoTarde", if (v) "1" else "0")
+
+    /**
+     * Dónde dejó el usuario cada tarjeta de Monitoreo: centro en fracción del ancho/alto de la escena
+     * (así sirve en cualquier pantalla). Formato guardado: "clave:x,y;clave:x,y".
+     */
+    var posicionesTarjetas: Map<String, Pair<Float, Float>>
+        get() = caja.leer("posicionesTarjetas").orEmpty().split(";").mapNotNull { item ->
+            val (clave, xy) = item.split(":").takeIf { it.size == 2 } ?: return@mapNotNull null
+            val (x, y) = xy.split(",").mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 2 } ?: return@mapNotNull null
+            clave to (x.coerceIn(0f, 1f) to y.coerceIn(0f, 1f))
+        }.toMap()
+        set(v) = caja.guardar("posicionesTarjetas", v.entries.joinToString(";") { (k, p) -> "$k:${p.first},${p.second}" })
+
+    /** Veces que se mostró en Monitoreo la pista "mantén presionada una tarjeta para moverla". */
+    var pistaTarjetasVista: Int
+        get() = caja.leer("pistaTarjetasVista")?.toIntOrNull() ?: 0
+        set(v) = caja.guardar("pistaTarjetasVista", v.toString())
+
+    /** Veces que se abrió Monitoreo (para repetir la pista de vez en cuando). */
+    var aperturasMonitoreo: Int
+        get() = caja.leer("aperturasMonitoreo")?.toIntOrNull() ?: 0
+        set(v) = caja.guardar("aperturasMonitoreo", v.toString())
 }

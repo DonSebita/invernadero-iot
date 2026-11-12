@@ -19,6 +19,17 @@
  *              la app envía    "C|<cmd>|<firma>"
  *   Serial USB: comandos de 1 letra SIN firma (puerto de mantenimiento local, requiere acceso físico)
  *
+ * NUBE (modelo híbrido con Firebase Realtime Database):
+ *   - El tiempo real sigue siendo local (arriba). A la nube se sube menos y más lento:
+ *       estado  cada 2 min  (PUT  invernaderos/<id>/estado)      → lo último, para mirar desde lejos
+ *       resumen cada 5 min  (POST invernaderos/<id>/resumenes)   → promedio, mínimo y máximo
+ *       avisos  al ocurrir  (POST invernaderos/<id>/alertas)     → calor, frío, tierra seca, sensor caído, reinicio
+ *   - Corre en una tarea aparte (núcleo 0): el control del invernadero nunca espera a Internet.
+ *   - HTTPS verificado con los certificados raíz de Google; el ESP32 entra con SU PROPIA cuenta de Firebase
+ *     (la crea la app: Ajustes > Nube > Vincular ESP32) y las reglas solo le dejan escribir esas 3 cosas.
+ *   - Sin Internet los resúmenes esperan en una cola (hasta 2 h) y se suben al volver.
+ *   - Por la nube NO llegan órdenes: los comandos siguen siendo solo locales y firmados.
+ *
  * Seguridad:
  *   - La clave SECRETO nunca viaja por la red; solo viajan firmas.
  *   - El nonce cambia después de cada comando: un comando capturado no se puede repetir.
@@ -26,6 +37,7 @@
  *   - Lista blanca de comandos y validación de rangos.
  *
  * Librerías: "DHT sensor library" (Adafruit), "Adafruit Unified Sensor", "ESP32Servo"
+ *            (WiFiClientSecure y HTTPClient vienen con el core ESP32 de Espressif, versión 3.x)
  * Placa: ESP32 Dev Module (BluetoothSerial NO existe en ESP32-S3 / C3)
  */
 
@@ -37,12 +49,29 @@
 #include "mbedtls/md.h"
 #include "esp_random.h"
 #include <Preferences.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <time.h>
 
 // ───────── CONFIGURA ESTO ─────────
 const char* WIFI_SSID     = "TU_WIFI";
 const char* WIFI_PASSWORD = "TU_CLAVE";
 const char* SECRETO       = "cambia-esta-clave-larga-2025";   // igual que "Clave compartida" en la app (mín. 12)
 const char* NOMBRE_BT     = "Invernadero";
+// Bluetooth clásico + WiFi + HTTPS usan bastante memoria. Si en el Monitor Serie ves que la nube falla
+// por memoria ("heap libre" bajo), pon false aquí: el teléfono seguirá conectando por WiFi.
+const bool  USAR_BLUETOOTH = true;
+
+// ───────── NUBE (Firebase) ─────────
+// Estas 5 líneas las genera la app: Ajustes > Nube > Vincular ESP32 > Copiar. Pégalas aquí.
+const bool  NUBE_ACTIVA      = true;
+const char* FIREBASE_API_KEY = "PEGA_AQUI";
+const char* FIREBASE_URL     = "https://PEGA_AQUI.firebaseio.com";
+const char* INVERNADERO_ID   = "PEGA_AQUI";
+const char* ESP32_CORREO     = "PEGA_AQUI";
+const char* ESP32_CLAVE      = "PEGA_AQUI";
+const unsigned long CADA_ESTADO_MS  = 2UL * 60 * 1000;   // estado: cada 2 min
+const unsigned long CADA_RESUMEN_MS = 5UL * 60 * 1000;   // resumen: cada 5 min
 
 // IP fija: debe coincidir con la app (Ajustes) y con res/xml/network_security_config.xml
 const bool USAR_IP_FIJA = true;
@@ -127,6 +156,66 @@ int   humedadSueloAnalog = 0;
 String nonce;
 int fallosFirma = 0;
 unsigned long bloqueadoHasta = 0;
+
+// --- Nube ---
+// Certificados raíz de Google Trust Services (válidos hasta 2036): el ESP32 solo habla con servidores
+// de Google verificados, nunca con un impostor en la red.
+const char* CA_GOOGLE =
+  "-----BEGIN CERTIFICATE-----\n"
+  "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\n"
+  "bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c\n"
+  "-----END CERTIFICATE-----\n"
+  "-----BEGIN CERTIFICATE-----\n"
+  "MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+  "VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+  "A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+  "WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+  "IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+  "AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+  "QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+  "HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+  "BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+  "9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+  "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+  "-----END CERTIFICATE-----\n";
+
+struct Acumulado {            // lo que se junta entre un resumen y el siguiente
+  uint32_t n = 0;
+  float tSum = 0, tMin = 1000, tMax = -1000; uint32_t tN = 0;
+  float haSum = 0; uint32_t haN = 0;
+  float hsSum = 0, pwmSum = 0, ventanaSum = 0;
+  uint32_t ventiladorMs = 0;
+};
+Acumulado acumulado;
+SemaphoreHandle_t candado = NULL;   // protege "acumulado" (lo usan el loop y la tarea de la nube)
+int fallosDht = 0;
 
 BluetoothSerial SerialBT;
 WebServer server(80);
@@ -314,7 +403,26 @@ void leerSensores() {
   humedadSueloAnalog = analogRead(SOIL_A_PIN);
   float h = dht.readHumidity();
   float t = dht.readTemperature();
-  if (!isnan(h) && !isnan(t)) { humedadAmbiente = h; temperatura = t; }
+  if (!isnan(h) && !isnan(t)) { humedadAmbiente = h; temperatura = t; fallosDht = 0; }
+  else if (fallosDht < 1000) fallosDht++;
+}
+
+/** Suma la lectura actual al resumen en curso (cada 2 s). */
+void acumular() {
+  if (candado == NULL || xSemaphoreTake(candado, pdMS_TO_TICKS(20)) != pdTRUE) return;
+  Acumulado& a = acumulado;
+  a.n++;
+  if (!isnan(temperatura)) {
+    a.tSum += temperatura; a.tN++;
+    if (temperatura < a.tMin) a.tMin = temperatura;
+    if (temperatura > a.tMax) a.tMax = temperatura;
+  }
+  if (!isnan(humedadAmbiente)) { a.haSum += humedadAmbiente; a.haN++; }
+  a.hsSum += sueloPorcentaje(humedadSueloAnalog);
+  a.pwmSum += pwmFanActual;
+  a.ventanaSum += map(anguloActual, ANGULO_CERRADA, ANGULO_ABIERTA, 0, 90);
+  if (pwmFanActual > 0) a.ventiladorMs += intervaloLectura;
+  xSemaphoreGive(candado);
 }
 
 // ───────── Ciclo automático (tu lógica, cada 30 s) ─────────
@@ -405,7 +513,7 @@ void responderComando() {
 
 // ───────── Bluetooth ─────────
 void enviarDatosBT() {
-  if (!SerialBT.hasClient()) return;
+  if (!USAR_BLUETOOTH || !SerialBT.hasClient()) return;
   String cuerpo = jsonDatos();
   SerialBT.print("D|");
   SerialBT.print(cuerpo);
@@ -426,10 +534,188 @@ void procesarLineaBT(const String& linea) {   // "C|<cmd>|<firma>"
 }
 
 void leerBT() {
+  if (!USAR_BLUETOOTH) return;
   while (SerialBT.available()) {
     char ch = SerialBT.read();
     if (ch == '\n') { procesarLineaBT(bufferBT); bufferBT = ""; }
     else if (ch != '\r' && bufferBT.length() < 128) bufferBT += ch;
+  }
+}
+
+// ───────── Nube (Firebase Realtime Database por HTTPS) ─────────
+String tokenNube;                  // ID token de Firebase (dura 1 h; se renueva a los 50 min)
+unsigned long tokenDesde = 0;
+const int MAX_PENDIENTES = 24;     // 24 resúmenes de 5 min = 2 h sin Internet
+String pendientes[MAX_PENDIENTES];
+int nPendientes = 0;
+bool avisoActivo[4] = {false, false, false, false};
+unsigned long avisoUltimo[4] = {0, 0, 0, 0};
+
+bool nubeConfigurada() {
+  return NUBE_ACTIVA && strncmp(INVERNADERO_ID, "PEGA", 4) != 0 && strncmp(FIREBASE_API_KEY, "PEGA", 4) != 0;
+}
+
+bool horaLista() { return time(nullptr) > 1700000000; }   // ya llegó la hora por NTP
+
+/** Hora actual en ms (si ya hay hora) o la hora del servidor de Firebase. */
+String marcaDeTiempo() {
+  if (!horaLista()) return "{\".sv\":\"timestamp\"}";
+  char b[24];
+  snprintf(b, sizeof(b), "%llu", (unsigned long long)time(nullptr) * 1000ULL);
+  return String(b);
+}
+
+/** Valor de texto de un campo en un JSON simple ("clave":"valor"). */
+String campoJson(const String& json, const char* clave) {
+  int i = json.indexOf(String("\"") + clave + "\"");
+  if (i < 0) return "";
+  i = json.indexOf(':', i);
+  if (i < 0) return "";
+  i = json.indexOf('"', i);
+  if (i < 0) return "";
+  int f = json.indexOf('"', i + 1);
+  return f < 0 ? "" : json.substring(i + 1, f);
+}
+
+/** Petición HTTPS verificada. Devuelve el código HTTP (o negativo si no hubo conexión). */
+int pedirNube(const char* metodo, const String& url, const String& cuerpo, String* respuesta) {
+  WiFiClientSecure cliente;
+  cliente.setCACert(CA_GOOGLE);
+  HTTPClient http;
+  http.setConnectTimeout(10000);
+  http.setTimeout(10000);
+  if (!http.begin(cliente, url)) return -1;
+  http.addHeader("Content-Type", "application/json");
+  int codigo = http.sendRequest(metodo, cuerpo);
+  if (respuesta != nullptr && codigo > 0) *respuesta = http.getString();
+  http.end();
+  if (codigo < 0) mensaje("NUBE: sin conexión (" + HTTPClient::errorToString(codigo) + ", heap libre " + String(ESP.getFreeHeap()) + ")");
+  return codigo;
+}
+
+/** Entra con la cuenta propia del ESP32 (la creó la app) y guarda el ID token. */
+bool sesionNube() {
+  if (tokenNube.length() > 0 && millis() - tokenDesde < 50UL * 60 * 1000) return true;
+  String url = String("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=") + FIREBASE_API_KEY;
+  String cuerpo = String("{\"email\":\"") + ESP32_CORREO + "\",\"password\":\"" + ESP32_CLAVE + "\",\"returnSecureToken\":true}";
+  String r;
+  int codigo = pedirNube("POST", url, cuerpo, &r);
+  tokenNube = codigo == 200 ? campoJson(r, "idToken") : "";
+  if (tokenNube.length() == 0) {
+    mensaje("NUBE: no se pudo entrar (HTTP " + String(codigo) + "). Revisa las credenciales pegadas desde la app.");
+    return false;
+  }
+  tokenDesde = millis();
+  mensaje("NUBE: sesión iniciada");
+  return true;
+}
+
+/** Escribe en invernaderos/<id>/<ruta>.json. PUT reemplaza, POST agrega uno nuevo. */
+bool escribirNube(const char* metodo, const char* ruta, const String& json) {
+  String url = String(FIREBASE_URL) + "/invernaderos/" + INVERNADERO_ID + "/" + ruta + ".json?print=silent&auth=" + tokenNube;
+  int codigo = pedirNube(metodo, url, json, nullptr);
+  if (codigo == 401 || codigo == 403) {
+    tokenNube = "";      // token vencido o sin permiso: se vuelve a entrar en el próximo intento
+    mensaje("NUBE: la base rechazó la escritura en " + String(ruta) + " (¿ESP32 vinculado? ¿reglas publicadas?)");
+  }
+  return codigo == 200 || codigo == 204;
+}
+
+/** Estado actual en el mismo formato que lee la app (modo "Desde la nube"). */
+String jsonEstadoNube() {
+  int aperturaApp = map(anguloActual, ANGULO_CERRADA, ANGULO_ABIERTA, 0, 90);
+  String j = "{\"ts\":{\".sv\":\"timestamp\"}";
+  if (!isnan(temperatura)) j += ",\"temperatura\":" + String(temperatura, 1);
+  if (!isnan(humedadAmbiente)) j += ",\"humedadAire\":" + String(humedadAmbiente, 1);
+  j += ",\"humedades\":[" + String(sueloPorcentaje(humedadSueloAnalog), 1) + "]";
+  j += ",\"estadosSuelo\":[\"" + estadoSuelo(humedadSueloAnalog) + "\"]";
+  j += ",\"pwm\":" + String(pwmFanActual);
+  j += ",\"ventana\":" + String(aperturaApp);
+  j += ",\"modoVentilador\":\"" + String(modoManualFan ? "MANUAL" : "AUTO") + "\"";
+  j += ",\"modoVentana\":\"" + String(modoManualServo ? "MANUAL" : "AUTO") + "\"";
+  j += ",\"parametros\":{\"ventiladorSobre\":" + String(pVentiladorSobre) + ",\"ventanaDesde\":" + String(pVentanaDesde) +
+       ",\"ventanaHasta\":" + String(pVentanaHasta) + ",\"humedadMaxima\":" + String(pHumedadMaxima) + "}";
+  j += "}";
+  return j;
+}
+
+/** Cierra el resumen de los últimos 5 min (promedio, mínimo y máximo) y lo deja en la cola. */
+void cerrarResumen() {
+  if (candado == NULL || xSemaphoreTake(candado, pdMS_TO_TICKS(500)) != pdTRUE) return;
+  Acumulado a = acumulado;
+  acumulado = Acumulado();
+  xSemaphoreGive(candado);
+  if (a.n == 0) return;
+  float hs = a.hsSum / a.n;
+  String j = "{\"ts\":" + marcaDeTiempo() + ",\"n\":" + String(a.n);
+  if (a.tN > 0) j += ",\"tProm\":" + String(a.tSum / a.tN, 1) + ",\"tMin\":" + String(a.tMin, 1) + ",\"tMax\":" + String(a.tMax, 1);
+  if (a.haN > 0) j += ",\"haProm\":" + String(a.haSum / a.haN, 1);
+  j += ",\"hsProm\":" + String(hs, 1) + ",\"humedades\":[" + String(hs, 1) + "]";
+  j += ",\"pwmProm\":" + String(a.pwmSum / a.n, 0) + ",\"ventanaProm\":" + String(a.ventanaSum / a.n, 0);
+  j += ",\"ventiladorSeg\":" + String(a.ventiladorMs / 1000) + "}";
+  if (nPendientes == MAX_PENDIENTES) {          // cola llena: se descarta el más viejo
+    for (int i = 1; i < MAX_PENDIENTES; i++) pendientes[i - 1] = pendientes[i];
+    nPendientes--;
+  }
+  pendientes[nPendientes++] = j;
+}
+
+/** Sube los resúmenes en cola, del más viejo al más nuevo. Se detiene en el primero que falla. */
+void enviarPendientes() {
+  while (nPendientes > 0) {
+    if (!escribirNube("POST", "resumenes", pendientes[0])) return;
+    for (int i = 1; i < nPendientes; i++) pendientes[i - 1] = pendientes[i];
+    pendientes[--nPendientes] = "";
+  }
+}
+
+bool subirAviso(const char* tipo, const String& detalle) {
+  String j = String("{\"ts\":{\".sv\":\"timestamp\"},\"tipo\":\"") + tipo + "\",\"detalle\":\"" + detalle.substring(0, 110) + "\"}";
+  bool ok = escribirNube("POST", "alertas", j);
+  if (ok) mensaje("NUBE: aviso " + String(tipo) + " -> " + detalle);
+  return ok;
+}
+
+/** Un aviso se sube una vez al entrar en la condición; se rearma al salir (y como máximo cada 15 min). */
+void vigilar(int i, bool entra, bool sale, const char* tipo, const String& detalle) {
+  if (!avisoActivo[i] && entra && (avisoUltimo[i] == 0 || millis() - avisoUltimo[i] > 15UL * 60 * 1000)) {
+    if (subirAviso(tipo, detalle)) { avisoActivo[i] = true; avisoUltimo[i] = millis(); }
+  } else if (avisoActivo[i] && sale) {
+    avisoActivo[i] = false;
+  }
+}
+
+void revisarAvisos() {
+  float t = temperatura;
+  float hs = sueloPorcentaje(humedadSueloAnalog);
+  if (!isnan(t)) {
+    vigilar(0, t > pVentanaHasta + 5, t < pVentanaHasta + 3, "CALOR",
+            "Hace calor: " + String(t, 1) + " °C (la ventana abre del todo en " + String(pVentanaHasta) + " °C)");
+    vigilar(1, t < pVentanaDesde - 5, t > pVentanaDesde - 3, "FRIO", "Hace frío: " + String(t, 1) + " °C");
+  }
+  vigilar(2, hs < 15, hs > 25, "SECO", "La tierra está seca: " + String(hs, 0) + " % de humedad");
+  vigilar(3, fallosDht >= 5, fallosDht == 0, "SENSOR", "El sensor de temperatura y humedad no responde");
+}
+
+/** Tarea en el núcleo 0: todo lo de la nube. El loop (control, WiFi local, Bluetooth) nunca la espera. */
+void tareaNube(void* parametro) {
+  unsigned long proximoResumen = millis() + CADA_RESUMEN_MS;
+  unsigned long proximoEstado = 0;
+  unsigned long proximaRevision = 0;
+  bool avisoInicio = false;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    // El resumen se cierra cada 5 min aunque no haya Internet: espera en la cola
+    if ((long)(millis() - proximoResumen) >= 0) { proximoResumen += CADA_RESUMEN_MS; cerrarResumen(); }
+    // HTTPS necesita WiFi y la hora (para validar los certificados)
+    if (WiFi.status() != WL_CONNECTED || !horaLista()) continue;
+    if (!sesionNube()) { vTaskDelay(pdMS_TO_TICKS(60000)); continue; }
+    if (!avisoInicio) avisoInicio = subirAviso("INICIO", "El ESP32 se encendió (reinicio o corte de luz)");
+    if ((long)(millis() - proximoEstado) >= 0) {
+      proximoEstado = millis() + (escribirNube("PUT", "estado", jsonEstadoNube()) ? CADA_ESTADO_MS : 30000UL);
+    }
+    enviarPendientes();
+    if ((long)(millis() - proximaRevision) >= 0) { proximaRevision = millis() + 10000; revisarAvisos(); }
   }
 }
 
@@ -438,7 +724,7 @@ void setup() {
   Serial.begin(115200);
   cargarReglas();
   nuevoNonce();
-  SerialBT.begin(NOMBRE_BT);
+  if (USAR_BLUETOOTH) SerialBT.begin(NOMBRE_BT);
 
   analogReadResolution(12);
   analogSetPinAttenuation(SOIL_A_PIN, ADC_11db);
@@ -461,12 +747,22 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) Serial.println("IP del ESP32: " + WiFi.localIP().toString());
   else Serial.println("Sin WiFi: sigue funcionando por Bluetooth y Serial.");
 
+  // Nube: hora por NTP (necesaria para validar HTTPS) y tarea aparte en el núcleo 0
+  candado = xSemaphoreCreateMutex();
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  if (nubeConfigurada()) {
+    xTaskCreatePinnedToCore(tareaNube, "nube", 16384, NULL, 1, NULL, 0);
+    mensaje("Nube: activada (estado cada 2 min, resumen cada 5 min)");
+  } else {
+    mensaje("Nube: sin configurar (pega las credenciales de la app en la sección NUBE)");
+  }
+
   server.on("/datos", responderDatos);
   server.on("/comando", responderComando);
   server.onNotFound([]() { server.send(404, "text/plain", "no existe"); });
   server.begin();
 
-  mensaje("Sistema iniciado. Bluetooth: " + String(NOMBRE_BT));
+  mensaje("Sistema iniciado. Bluetooth: " + String(USAR_BLUETOOTH ? NOMBRE_BT : "desactivado"));
   mensaje("Serial USB: '+' '-' 'M' '0' (fan), 'A' 'C' (ventana), 'X' (auto)");
   leerSensores();
 }
@@ -483,6 +779,7 @@ void loop() {
   if (millis() - ultimaLectura >= intervaloLectura) {
     ultimaLectura = millis();
     leerSensores();
+    acumular();
     enviarDatosBT();
   }
 

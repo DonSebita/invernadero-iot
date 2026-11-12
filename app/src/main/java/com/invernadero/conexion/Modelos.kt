@@ -27,7 +27,8 @@ data class LecturaEsp32(
     val parametros: ParametrosControl? = null,   // null = el ESP32 (sketch antiguo) no informa sus reglas
     val nonce: String = "",                      // número de un solo uso para firmar el próximo comando
     val latenciaMs: Long = 0,
-    val recibidoEn: Long = System.currentTimeMillis()
+    val recibidoEn: Long = System.currentTimeMillis(),
+    val desdeNube: Boolean = false               // true = último estado que el ESP32 subió a Firebase (solo mirar)
 )
 
 /**

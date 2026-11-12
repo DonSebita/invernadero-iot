@@ -3,6 +3,7 @@ package com.invernadero.ui.monitoreo
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -118,7 +119,7 @@ private fun mezcla(a: Float, b: Float, f: Float) = a + (b - a) * f
 //  Datos que necesita la escena y puntos que devuelve para las etiquetas
 // ─────────────────────────────────────────────────────────────
 data class DatosEscena(
-    val humedades: List<Float>,
+    val humedades: List<Float?>,      // una por planta; null = planta que espera su sensor
     val temperatura: Float,
     val velocidadVentilador: Float,   // 0..1 (animado)
     val anguloAspas: Float,           // grados
@@ -166,7 +167,9 @@ fun DrawScope.dibujarEscena(cam: Camara, d: DatosEscena, p: Paleta): Anclas {
     posiciones.indices
         .sortedBy { cam.profundidad(posiciones[it]) }           // las de atrás primero
         .forEach { i ->
-            dibujarPlanta(cam, posiciones[i], alto, d.tiempo, d.velocidadVentilador, i * 1.7f, salud(d.humedades[i]))
+            val h = d.humedades[i]
+            if (h != null) dibujarPlanta(cam, posiciones[i], alto, d.tiempo, d.velocidadVentilador, i * 1.7f, salud(h))
+            else dibujarBrote(cam, posiciones[i], alto, d.tiempo, d.velocidadVentilador, i * 1.7f)
         }
     val anclasPlantas = posiciones.map { cam.proyectar(it + Vec3(0f, 0.005f, 0.09f)) }   // el sensor, delante de la planta
 
@@ -207,8 +210,9 @@ private fun DrawScope.dibujarCara(cam: Camara, c: Cara, tinte: Color, p: Paleta,
 // ─────────────────────────────────────────────────────────────
 private fun colorTierra(h: Float) = lerp(Color(0xFFC8A27A), Color(0xFF3E2723), (h / 100f).coerceIn(0f, 1f))
 
-private fun DrawScope.dibujarSuelo(cam: Camara, humedades: List<Float>, pos: List<Vec3>) {
-    val media = if (humedades.isEmpty()) 50f else humedades.average().toFloat()
+private fun DrawScope.dibujarSuelo(cam: Camara, humedades: List<Float?>, pos: List<Vec3>) {
+    val medidas = humedades.filterNotNull()
+    val media = if (medidas.isEmpty()) 50f else medidas.average().toFloat()
     val base = colorTierra(media)
     prisma(-HX + 0.02f, HX - 0.02f, -HY + 0.004f, -HY + SUELO, -HZ + 0.02f, HZ - 0.02f)
         .filter { cam.mira(it.normal) }
@@ -222,7 +226,12 @@ private fun DrawScope.dibujarSuelo(cam: Camara, humedades: List<Float>, pos: Lis
             val a = 2f * PI_F * k / 28
             Vec3(c.x + r * cos(a), c.y + 0.002f, c.z + r * 0.8f * sin(a))
         }
-        drawPath(cam.camino(circulo), colorTierra(humedades[i]).copy(alpha = 0.9f))
+        val h = humedades[i]
+        if (h != null) drawPath(cam.camino(circulo), colorTierra(h).copy(alpha = 0.9f))
+        else drawPath(   // lugar reservado: borde punteado, sin mancha de humedad
+            cam.camino(circulo), Color.White.copy(alpha = 0.7f),
+            style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())))
+        )
     }
 }
 
@@ -282,6 +291,19 @@ private fun DrawScope.dibujarPlanta(
     val pTope = cam.proyectar(tope)
     dibujarHoja(pTope, -70f + brote, h * esc * 0.13f, colorHoja)
     dibujarHoja(pTope, -110f + brote, h * esc * 0.13f, colorHoja)
+}
+
+/** Planta añadida que todavía no tiene sensor: un brote pequeño y pálido. */
+private fun DrawScope.dibujarBrote(cam: Camara, base: Vec3, h: Float, t: Float, viento: Float, fase: Float) {
+    val alto = h * 0.22f
+    val tope = base + Vec3(sin(t * (1.2f + 4f * viento) + fase) * alto * 0.08f - alto * 0.2f * viento, alto, 0f)
+    val esc = cam.escalaEn(base)
+    val color = Color(0xFF9CCC65).copy(alpha = 0.75f)
+    val pBase = cam.proyectar(base)
+    val pTope = cam.proyectar(tope)
+    drawLine(color, pBase, pTope, h * esc * 0.03f, StrokeCap.Round)
+    dibujarHoja(pTope, -35f, h * esc * 0.11f, color)
+    dibujarHoja(pTope, -145f, h * esc * 0.11f, color)
 }
 
 private fun DrawScope.dibujarHoja(p: Offset, anguloGrados: Float, tam: Float, color: Color) {

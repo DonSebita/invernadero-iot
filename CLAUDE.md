@@ -2,7 +2,8 @@
 
 App Android (Kotlin + Jetpack Compose + Material 3) para monitorear y controlar un invernadero con ESP32.
 Paquete `com.invernadero`. Idioma de la app, del código y de la documentación: **español**.
-Sin Internet por diseño: SQLite local, WiFi/Bluetooth locales, sin dependencias de nube.
+Modelo **híbrido**: tiempo real local (WiFi/Bluetooth con el ESP32, SQLite) + **Firebase** (Authentication y
+Realtime Database) para cuentas en varios teléfonos, estado/resúmenes que sube el ESP32 y pases de visita.
 
 ## Documentación que hay que mantener
 
@@ -35,8 +36,13 @@ Al actualizarlo:
   panel "Raíces" quedó guardado en `_to_delete/PantallaRaices.kt.txt` por si se retoma en una app/sección aparte.
 
 - No hay SDK de Android en las sesiones en la nube: no se puede compilar ahí; revisar con cuidado y pedir al usuario que compile.
+- Firebase: todo pasa por `nube/Nube.kt`. Estructura y permisos en `firebase/database.rules.json` (si cambias qué se
+  guarda en la nube, actualiza las reglas y avísale al usuario que las vuelva a publicar). Necesita `app/google-services.json`.
+- Por la nube NO viajan órdenes al ESP32: los comandos siguen siendo locales y firmados con HMAC.
+- El ESP32 sube estado (2 min), resúmenes (5 min) y avisos desde una tarea en el núcleo 0 (`esp32/…ino`, sección NUBE).
 - Base de datos: `datos/BaseDatos.kt` (versión actual 3). Todo cambio de esquema necesita `onUpgrade` sin borrar datos.
-- Seguridad: nunca guardar contraseñas, semillas ni claves en texto plano; auditar acciones sensibles con `db.auditar(...)`.
+- Seguridad: nunca guardar contraseñas, semillas ni claves en texto plano; auditar acciones sensibles con `db.auditar(...)`
+  (se copia sola a la nube cuando hay sesión).
 - Diseño: títulos en Bricolage Grotesque y cuerpo/datos en Instrument Sans (`res/font/`, tema en `ui/Tema.kt`);
   bloques con `Seccion` (superficie tonal plana, sin sombra) y gráficas con `GraficaSerie` (`ui/Comunes.kt`); tono de los textos inspirado en la naturaleza
   (marca GreenBox), pero los botones dicen claramente su acción.

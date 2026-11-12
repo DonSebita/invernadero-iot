@@ -3,6 +3,9 @@
 package com.invernadero.ui.historial
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -39,13 +42,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.invernadero.Contenedor
 import com.invernadero.conexion.ParametrosControl
+import com.invernadero.conexion.haceCuanto
+import com.invernadero.datos.BaseDatos
 import com.invernadero.datos.RegistroLectura
+import com.invernadero.nube.AlertaNube
+import com.invernadero.datos.nombrePlanta
 import com.invernadero.ui.Encabezado
 import com.invernadero.ui.GraficaSerie
 import com.invernadero.ui.PuntoSerie
 import com.invernadero.ui.Seccion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -65,20 +73,34 @@ private val Rangos = listOf(
 fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
     var rango by rememberSaveable { mutableIntStateOf(1) }
     var planta by rememberSaveable { mutableIntStateOf(-1) }        // -1 = todas (promedio)
-    var lecturas by remember { mutableStateOf<List<RegistroLectura>>(emptyList()) }
+    var locales by remember { mutableStateOf<List<RegistroLectura>>(emptyList()) }
+    var enNube by remember { mutableStateOf<List<RegistroLectura>>(emptyList()) }
+    var avisos by remember { mutableStateOf<List<AlertaNube>>(emptyList()) }
     var periodo by remember { mutableStateOf(0L to 0L) }               // [desde, hasta] del eje X
     val reglas = c.conexion.lectura.collectAsState().value?.parametros ?: ParametrosControl.FABRICA
+    val invernadero = c.sesion.usuario.collectAsState().value?.invernadero.orEmpty()
 
     LaunchedEffect(rango) {
-        lecturas = emptyList()
+        locales = emptyList()
         while (true) {
             val ahora = System.currentTimeMillis()
             val desde = ahora - Rangos[rango].ms
-            lecturas = withContext(Dispatchers.IO) { c.db.lecturasDesde(desde) }
+            locales = withContext(Dispatchers.IO) { c.db.lecturasCrudasDesde(desde) }
             periodo = desde to ahora
             delay(30_000)                     // se guarda una lectura cada 30 s
         }
     }
+    // Resúmenes de 5 min que subió el ESP32: rellenan lo que este teléfono no alcanzó a guardar
+    LaunchedEffect(rango, invernadero) {
+        enNube = emptyList()
+        if (invernadero.isNotEmpty()) {
+            c.nube.resumenes(invernadero, System.currentTimeMillis() - Rangos[rango].ms).catch { }.collect { enNube = it }
+        }
+    }
+    LaunchedEffect(invernadero) {
+        if (invernadero.isNotEmpty()) c.nube.alertas(invernadero).catch { }.collect { avisos = it }
+    }
+    val lecturas = remember(locales, enNube) { BaseDatos.agrupar(BaseDatos.combinar(locales, enNube)) }
 
     val sensores = lecturas.maxOfOrNull { it.humedades.size } ?: 0
     val p = if (planta < sensores) planta else -1
@@ -86,8 +108,10 @@ fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
     val eje: (Long) -> String = { formato.format(Date(it)) }
     val cs = MaterialTheme.colorScheme
 
+    val nombres by c.plantas.nombres.collectAsState()
+
     LazyColumn(
-        Modifier.fillMaxSize(),
+        Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -117,8 +141,21 @@ fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
                             ChipPlanta("Todas", ultima?.humedadSuelo, p == -1) { planta = -1 }
                         }
                         items(sensores) { i ->
-                            ChipPlanta("Planta ${i + 1}", ultima?.humedades?.getOrNull(i), p == i) { planta = i }
+                            ChipPlanta(nombrePlanta(nombres, i), ultima?.humedades?.getOrNull(i), p == i) { planta = i }
                         }
+                    }
+                }
+            }
+        }
+
+        // ── Avisos que subió el ESP32 a la nube (calor, frío, tierra seca, sensor sin responder…) ──
+        val recientes = avisos.filter { it.ts >= System.currentTimeMillis() - 7 * 24 * 3_600_000L }.take(5)
+        if (recientes.isNotEmpty()) item {
+            Seccion("Avisos del invernadero", subtitulo = "Últimos 7 días, desde la nube") {
+                recientes.forEach { a ->
+                    Column {
+                        Text(a.detalle, style = MaterialTheme.typography.bodyLarge)
+                        Text(haceCuanto(a.ts), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -129,7 +166,7 @@ fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
             Seccion(
                 "Humedad de la tierra",
                 subtitulo = when {
-                    p >= 0 -> "Planta ${p + 1}"
+                    p >= 0 -> nombrePlanta(nombres, p)
                     sensores > 1 -> "Promedio de $sensores sensores"
                     else -> null
                 }

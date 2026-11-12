@@ -46,13 +46,13 @@ import com.invernadero.Contenedor
 import com.invernadero.conexion.buscarCentral
 import com.invernadero.conexion.esIpValida
 import com.invernadero.conexion.ipLocal
+import com.invernadero.conexion.textoCorto
 import com.invernadero.datos.ModoConexion
 import com.invernadero.datos.Usuario
 import com.invernadero.ui.OpcionRadio
 import com.invernadero.ui.Seccion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 @Composable
@@ -62,7 +62,11 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val estado by c.conexion.estado.collectAsState()
-    var cfg by remember { mutableStateOf(c.ajustes.cargar()) }
+    // En un teléfono donde nunca se configuró la conexión, la app ya está mirando desde la nube
+    var cfg by remember {
+        val guardada = c.ajustes.cargar()
+        mutableStateOf(if (!c.ajustes.configurado && u.invernadero.isNotEmpty()) guardada.copy(modo = ModoConexion.NUBE) else guardada)
+    }
     var verClave by remember { mutableStateOf(false) }
     var buscando by remember { mutableStateOf(false) }
 
@@ -83,7 +87,7 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
     }
 
     fun validarYGuardar() {
-        val necesitaClave = cfg.modo != ModoConexion.SIMULADOR || cfg.compartir
+        val necesitaClave = (cfg.modo != ModoConexion.SIMULADOR && cfg.modo != ModoConexion.NUBE) || cfg.compartir
         val error = when {
             necesitaClave && cfg.secreto.length < 12 -> "La clave compartida debe tener al menos 12 caracteres"
             cfg.modo == ModoConexion.WIFI && !esIpValida(cfg.ipEsp32) -> "IP del ESP32 no válida"
@@ -116,26 +120,26 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                 } else {
                     Text(u.nombre)
                     Text(
-                        "ID de cuenta ${u.idVisible}" + if (c.sesion.recordada) " · recordada en este teléfono" else "",
+                        listOfNotNull(u.correo, if (c.sesion.recordada) "recordada en este teléfono" else null).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Con esta cuenta entras en cualquier teléfono y ves el mismo invernadero.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 OutlinedButton(onClick = {
                     scope.launch {
-                        withContext(Dispatchers.IO) {
-                            c.recordar.olvidar(u)          // cerrar sesión también olvida el "Recordarme"
-                            c.db.auditar(u.nombre, if (u.invitado) "INVITADO" else "SESION", if (u.invitado) "Fin de la visita" else "Cierre de sesión", "OK")
-                        }
-                        c.conexion.detener()
-                        c.sesion.cerrar()
+                        // Cerrar sesión también olvida el "Recordarme" y, si era una visita, borra su identidad temporal
+                        c.cerrarSesion(u, if (u.invitado) "INVITADO" else "SESION", if (u.invitado) "Fin de la visita" else "Cierre de sesión")
                     }
                 }) { Text(if (u.invitado) "Terminar visita" else "Cerrar sesión") }
             }
 
             if (!u.invitado) Seccion("Conexión inalámbrica") {
-                Text("Estado: ${estado.descripcion} — ${if (estado.conectado) "conectado" else estado.mensaje ?: "sin conexión"}",
-                    style = MaterialTheme.typography.bodySmall)
+                Text("Estado: ${estado.textoCorto()}", style = MaterialTheme.typography.bodySmall)
 
                 Column(Modifier.selectableGroup()) {
                     ModoConexion.entries.forEach { m ->
@@ -166,6 +170,12 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                         supportingText = { Text("Primero emparéjalo en Ajustes del teléfono > Bluetooth") },
                         modifier = Modifier.fillMaxWidth()
                     )
+                    ModoConexion.NUBE -> Text(
+                        "No necesita IP ni clave: verás lo último que subió el ESP32 (cada 2 min) desde cualquier lugar con " +
+                            "Internet. Desde la nube solo se mira; para mover el ventilador o la ventana usa WiFi o Bluetooth.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     ModoConexion.REMOTO -> {
                         OutlinedTextField(
                             value = cfg.ipCentral, onValueChange = { cfg = cfg.copy(ipCentral = it.take(15)) },
@@ -188,7 +198,7 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                     }
                 }
 
-                OutlinedTextField(
+                if (cfg.modo != ModoConexion.NUBE) OutlinedTextField(
                     value = cfg.secreto, onValueChange = { cfg = cfg.copy(secreto = it.take(64)) },
                     label = { Text("Clave compartida") }, singleLine = true, enabled = admin,
                     visualTransformation = if (verClave) VisualTransformation.None else PasswordVisualTransformation(),
@@ -198,7 +208,7 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (cfg.modo != ModoConexion.REMOTO) {
+                if (cfg.modo != ModoConexion.REMOTO && cfg.modo != ModoConexion.NUBE) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Compartir con otros teléfonos")
@@ -215,8 +225,8 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
             }
 
             if (!u.invitado) {
+                SeccionNube(c, u) { aviso(it) }
                 SeccionInvitar(c, u) { aviso(it) }
-                SeccionSemilla(c, u)
             }
         }
     }

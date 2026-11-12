@@ -33,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -150,6 +152,37 @@ fun OpcionRadio(texto: String, seleccionado: Boolean, habilitado: Boolean = true
             if (ayuda != null) Text(ayuda, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Respuesta inmediata de los controles
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Lo que el usuario acaba de pedir (mover un deslizador, prender el ventilador…).
+ * El ESP32 confirma recién en la próxima lectura (~2 s); mientras tanto el control muestra lo pedido
+ * en vez de volver al valor anterior. Se suelta al confirmarse, si el envío falla o a los 8 s.
+ */
+class Pedido<T> {
+    var valor by mutableStateOf<T?>(null)
+}
+
+@Composable
+fun <T> rememberPedido(): Pedido<T> = remember { Pedido() }
+
+/** Valor a mostrar: lo pedido mientras no se confirme; si no, el [real]. */
+@Composable
+fun <T> Pedido<T>.mostrar(real: T, igual: (T, T) -> Boolean = { a, b -> a == b }): T {
+    val p = valor
+    LaunchedEffect(p) {
+        if (p != null) {
+            delay(8_000)
+            valor = null
+        }
+    }
+    val confirmado = p != null && igual(real, p)
+    LaunchedEffect(confirmado) { if (confirmado) valor = null }
+    return p ?: real
 }
 
 /** Fila "etiqueta ........ valor": etiqueta tenue, valor firme y con cifras alineadas. */

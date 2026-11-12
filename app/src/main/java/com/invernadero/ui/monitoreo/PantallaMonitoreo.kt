@@ -6,7 +6,39 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import android.content.res.Configuration
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.material3.Card
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import com.invernadero.datos.PlantasRepo
+import com.invernadero.datos.nombrePlanta
+import com.invernadero.ui.mostrar
+import com.invernadero.ui.rememberPedido
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,7 +128,8 @@ import androidx.compose.ui.geometry.lerp as lerpOffset
 
 /** Qué parámetro de la escena se tocó. */
 sealed interface Parametro {
-    data class Planta(val indice: Int) : Parametro
+    data object Plantas : Parametro
+    data object GestionPlantas : Parametro      // botón "+" junto a la hoja: añadir o quitar plantas
     data object Temperatura : Parametro
     data object HumedadAire : Parametro
     data object Ventilador : Parametro
@@ -112,9 +145,14 @@ class ZonaToque(val parametro: Parametro, val area: Rect)
 @Composable
 fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean) -> Unit) {
     val lectura by c.conexion.lectura.collectAsState()
-    val estado by c.conexion.estado.collectAsState()
     val usuario by c.sesion.usuario.collectAsState()
+    val nombres by c.plantas.nombres.collectAsState()
+    val esperando by c.plantas.esperando.collectAsState()
+    val quitadas by c.plantas.quitadas.collectAsState()
+    LaunchedEffect(lectura?.humedades?.size) { lectura?.humedades?.size?.let { c.plantas.sincronizar(it) } }
+    val plantas = lectura?.let { plantasVisibles(it, quitadas, esperando) } ?: emptyList()
 
+    val apaisado = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val mezclaTema by animateFloatAsState(if (modoTarde) 1f else 0f, tween(800), label = "tema")
     val paleta = mezclarPaletas(PaletaDia, PaletaTarde, mezclaTema)
 
@@ -141,19 +179,49 @@ fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean
 
     var seleccion by remember { mutableStateOf<ZonaToque?>(null) }
     val zonas = remember { mutableListOf<ZonaToque>() }
+    // Dónde dejó el usuario cada tarjeta (fracción de la escena); sin entrada = lugar automático
+    val posiciones = remember {
+        mutableStateMapOf<String, Offset>().apply {
+            putAll(c.ajustes.posicionesTarjetas.mapValues { (_, p) -> Offset(p.first, p.second) })
+        }
+    }
+    fun guardarPosiciones() {
+        c.ajustes.posicionesTarjetas = posiciones.mapValues { (_, o) -> o.x to o.y }
+    }
 
+    // Pista "mantén presionada una tarjeta para moverla": las primeras veces (mientras no se haya
+    // movido ninguna) y después de vez en cuando. Se va sola o al tocar la escena.
+    var pistaVisible by remember { mutableStateOf(false) }
+    val pista = animateFloatAsState(if (pistaVisible) 1f else 0f, tween(450), label = "pista")
+    LaunchedEffect(Unit) {
+        val aperturas = c.ajustes.aperturasMonitoreo + 1
+        c.ajustes.aperturasMonitoreo = aperturas
+        val vistas = c.ajustes.pistaTarjetasVista
+        if ((posiciones.isEmpty() && vistas < 4) || aperturas % 10 == 0) {
+            c.conexion.lectura.first { it != null }
+            delay(1500)
+            pistaVisible = true
+            c.ajustes.pistaTarjetasVista = vistas + 1
+            delay(9000)
+            pistaVisible = false
+        }
+    }
+
+    // El cielo llena toda la pantalla, también detrás de la barra de estado y la cámara;
+    // solo el contenido se aparta de esas zonas
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(paleta.fondo))) {
-        // Cielo con sol, nubes que pasan lento y colinas
         Canvas(Modifier.fillMaxSize()) { dibujarCielo(tiempo.floatValue, mezclaTema) }
 
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(horizontal = 8.dp, vertical = if (apaisado) 6.dp else 10.dp),
+            verticalArrangement = Arrangement.spacedBy(if (apaisado) 4.dp else 8.dp)
         ) {
             BarraSuperior(paleta, modoTarde, alCambiarModo)
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 EscenaInvernadero(
                     lectura = lectura,
+                    plantas = plantas.map { it.humedad },
                     tiempo = tiempo,
                     aspas = aspas,
                     velocidad = velocidad,
@@ -161,7 +229,12 @@ fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean
                     paleta = paleta,
                     seleccionado = seleccion?.parametro,
                     zonas = zonas,
+                    posiciones = posiciones,
+                    alMover = { clave, fraccion -> posiciones[clave] = fraccion },
+                    alSoltar = { guardarPosiciones() },
                     alTocar = { z -> seleccion = if (z == null || z.parametro == seleccion?.parametro) null else z },
+                    pista = pista,
+                    alInteractuar = { pistaVisible = false },
                     modifier = Modifier.fillMaxSize()
                 )
                 val sel = seleccion
@@ -171,14 +244,17 @@ fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean
                         PanelModificador(
                             parametro = sel.parametro,
                             l = l,
+                            plantas = plantas,
+                            quitadas = quitadas,
                             puedeActivar = usuario?.rol?.puedeActivar == true,
+                            puedeRenombrar = usuario?.invitado == false,
+                            nombres = nombres,
                             c = c,
                             alCerrar = { seleccion = null }
                         )
                     }
                 }
             }
-            BarraEstado(lectura, estado, paleta)
         }
     }
 }
@@ -257,32 +333,8 @@ private fun IconoAtardecer(modifier: Modifier) {
     }
 }
 
-@Composable
-private fun BarraEstado(lectura: LecturaEsp32?, e: EstadoConexion, p: Paleta) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(p.tarjeta).padding(horizontal = 18.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(if (e.conectado) p.verde else MaterialTheme.colorScheme.error))
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(e.descripcion, color = p.texto, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                e.mensaje ?: if (e.compartiendo) "Compartiendo con ${e.telefonosConectados} teléfono(s)" else "Toca un dato para modificarlo",
-                color = p.texto.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (lectura != null) {
-            Spacer(Modifier.width(8.dp))
-            Box(Modifier.clip(CircleShape).background(p.verde.copy(alpha = 0.16f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                Text("${lectura.humedades.size} sensores", color = p.verde, style = MaterialTheme.typography.labelMedium)
-            }
-        }
-    }
-}
-
 // ─────────────────────────────────────────────────────────────
-//  Cielo: sol, nubes en dos capas (las lejanas más lentas) y colinas
+//  Cielo: sol, nubes en dos capas (las lejanas más lentas), aves, colinas y animales
 // ─────────────────────────────────────────────────────────────
 private class Nube(val y: Float, val escala: Float, val velocidad: Float, val fase: Float, val cerca: Boolean)
 
@@ -300,58 +352,76 @@ private val NUBES = listOf(
 private fun DrawScope.dibujarCielo(t: Float, tarde: Float) {
     val w = size.width
     val h = size.height
+    // Ancho de referencia: en vertical es el ancho; en horizontal no crece más que 0,6 × alto.
+    // Sol, nubes, colinas y árboles se miden con él, y el paisaje se repite a lo ancho en vez de estirarse.
+    val ref = min(w, h * 0.6f)
 
     // Sol: arriba a la derecha de día, grande y bajo al atardecer
     val sol = lerpOffset(Offset(w * 0.84f, h * 0.10f), Offset(w * 0.22f, h * 0.72f), tarde)
     val colorSol = lerp(Color(0xFFFFF4B8), Color(0xFFFFB37A), tarde)
-    val radio = w * (0.065f + 0.05f * tarde)
+    val radio = ref * (0.065f + 0.05f * tarde)
     drawCircle(Brush.radialGradient(listOf(colorSol.copy(alpha = 0.5f), Color.Transparent), sol, radio * 3.4f), radio * 3.4f, sol)
     drawCircle(colorSol, radio, sol)
 
     // Nubes: blancas de día, durazno al atardecer
     val colorNube = lerp(Color.White, Color(0xFFFFD2B8), tarde)
-    for (n in NUBES) {
-        val ancho = w * 0.34f * n.escala
-        val x = ((n.fase + t * n.velocidad) % 1f) * (w + ancho * 2) - ancho
+    val copias = (w / ref).roundToInt().coerceIn(1, 3)   // más nubes si la pantalla es más ancha
+    for (copia in 0 until copias) for (n in NUBES) {
+        val ancho = ref * 0.34f * n.escala
+        val x = ((n.fase + copia.toFloat() / copias + t * n.velocidad * ref / w) % 1f) * (w + ancho * 2) - ancho
         val alpha = (if (n.cerca) 0.88f else 0.55f) * (1f - 0.3f * tarde)
         dibujarNube(Offset(x, h * n.y), ancho, colorNube.copy(alpha = alpha))
     }
+    dibujarAves(t, tarde, ref)
 
     // Paisaje en tres capas: cada colina con su vegetación; lo lejano más chico y desteñido (profundidad)
     val luz = 1f - 2f * tarde          // de día la luz viene de la derecha; al atardecer, de la izquierda
-    val lejana = Colina(h * 0.74f, h * 0.030f, 1.1f, 2.6f)
-    colina(lejana.base, lejana.amplitud, lejana.frecuencia, lejana.fase, lerp(Color(0xFFBBDCC3), Color(0xFF8E5A62), tarde))
+    val lejana = Colina(h * 0.74f, min(h, ref * 2f) * 0.030f, 1.1f, 2.6f, ref)
+    val colorLejana = lerp(Color(0xFFBBDCC3), Color(0xFF8E5A62), tarde)
+    colina(lejana, colorLejana)
     val tonoLejos = TonoArbol(
         copa = lerp(Color(0xFF93C79E), Color(0xFF74485A), tarde), pino = lerp(Color(0xFF84BB92), Color(0xFF6A4152), tarde),
         arbusto = lerp(Color(0xFF9CCDA6), Color(0xFF7A4C5E), tarde), tronco = lerp(Color(0xFF86A08D), Color(0xFF5E3B4A), tarde)
     )
-    for (a in ARBOLES_LEJOS) dibujarArbol(a, lejana, h * 0.050f, tonoLejos, t, luz, tarde)
+    repetirAlAncho(ref) { desde -> for (a in ARBOLES_LEJOS) dibujarArbol(a, desde + a.x * ref, lejana, min(h, ref * 2f) * 0.050f, tonoLejos, t, luz, tarde) }
+    dibujarAnimales(ANIMALES_LEJOS, lejana, min(h, ref * 2f) * 0.050f, t, tarde, colorLejana, 0.45f)
 
-    val media = Colina(h * 0.80f, h * 0.035f, 1.4f, 0.4f)
-    colina(media.base, media.amplitud, media.frecuencia, media.fase, lerp(Color(0xFFA5D6A7), Color(0xFF7A4F55), tarde))
+    val media = Colina(h * 0.80f, min(h, ref * 2f) * 0.035f, 1.4f, 0.4f, ref)
+    val colorMedia = lerp(Color(0xFFA5D6A7), Color(0xFF7A4F55), tarde)
+    colina(media, colorMedia)
     val tonoMedio = TonoArbol(
         copa = lerp(Color(0xFF62AB6D), Color(0xFF5C3645), tarde), pino = lerp(Color(0xFF4C915E), Color(0xFF4E2E3C), tarde),
         arbusto = lerp(Color(0xFF6DB477), Color(0xFF633B4B), tarde), tronco = lerp(Color(0xFF7A5A43), Color(0xFF3F2733), tarde)
     )
-    for (a in ARBOLES_MEDIO) dibujarArbol(a, media, h * 0.080f, tonoMedio, t, luz, tarde)
+    repetirAlAncho(ref) { desde -> for (a in ARBOLES_MEDIO) dibujarArbol(a, desde + a.x * ref, media, min(h, ref * 2f) * 0.080f, tonoMedio, t, luz, tarde) }
+    dibujarAnimales(ANIMALES_MEDIO, media, min(h, ref * 2f) * 0.080f, t, tarde, colorMedia, 0.12f)
 
-    val cercana = Colina(h * 0.88f, h * 0.030f, 2.2f, 1.9f)
-    colina(cercana.base, cercana.amplitud, cercana.frecuencia, cercana.fase, lerp(Color(0xFF81C784), Color(0xFF4E3440), tarde))
+    val cercana = Colina(h * 0.88f, min(h, ref * 2f) * 0.030f, 2.2f, 1.9f, ref)
+    val colorCercana = lerp(Color(0xFF81C784), Color(0xFF4E3440), tarde)
+    colina(cercana, colorCercana)
     val tonoCerca = TonoArbol(
         copa = lerp(Color(0xFF3F8F4E), Color(0xFF462A37), tarde), pino = lerp(Color(0xFF2F7745), Color(0xFF3A2230), tarde),
         arbusto = lerp(Color(0xFF55A15E), Color(0xFF4F2F3D), tarde), tronco = lerp(Color(0xFF6B4B36), Color(0xFF33202A), tarde)
     )
-    for (a in ARBOLES_CERCA) dibujarArbol(a, cercana, h * 0.105f, tonoCerca, t, luz, tarde)
+    repetirAlAncho(ref) { desde -> for (a in ARBOLES_CERCA) dibujarArbol(a, desde + a.x * ref, cercana, min(h, ref * 2f) * 0.105f, tonoCerca, t, luz, tarde) }
+    dibujarAnimales(ANIMALES_CERCA, cercana, min(h, ref * 2f) * 0.105f, t, tarde, colorCercana, 0f)
 }
 
 // ─────────────────────────────────────────────────────────────
 //  Vegetación del fondo: árboles de copa, pinos, arbustos y pasto
 // ─────────────────────────────────────────────────────────────
-private class Colina(val base: Float, val amplitud: Float, val frecuencia: Float, val fase: Float)
+/** [periodo]: ancho en el que la colina hace sus ondulaciones (se repite a lo ancho). */
+internal class Colina(val base: Float, val amplitud: Float, val frecuencia: Float, val fase: Float, val periodo: Float)
+
+/** Llama [dibujar] con el inicio de cada tramo de ancho [ref] que hace falta para cubrir la pantalla. */
+private inline fun DrawScope.repetirAlAncho(ref: Float, dibujar: (Float) -> Unit) {
+    var desde = 0f
+    while (desde < size.width) { dibujar(desde); desde += ref }
+}
 
 /** Altura de la colina en x (misma fórmula que colina()). */
-private fun DrawScope.sueloEn(c: Colina, x: Float) =
-    c.base - c.amplitud * sin(x / size.width * PI.toFloat() * c.frecuencia + c.fase)
+internal fun DrawScope.sueloEn(c: Colina, x: Float) =
+    c.base - c.amplitud * sin(x / c.periodo * PI.toFloat() * c.frecuencia + c.fase)
 
 private enum class TipoArbol { COPA, PINO, ARBUSTO, PASTO }
 
@@ -362,26 +432,30 @@ private class TonoArbol(val copa: Color, val pino: Color, val arbusto: Color, va
 
 private val ARBOLES_LEJOS = listOf(
     Arbol(0.02f, TipoArbol.PINO, 0.9f), Arbol(0.06f, TipoArbol.COPA, 1.1f), Arbol(0.10f, TipoArbol.PINO, 1.2f),
-    Arbol(0.29f, TipoArbol.COPA, 0.9f), Arbol(0.33f, TipoArbol.PINO, 1.0f),
-    Arbol(0.61f, TipoArbol.PINO, 1.1f), Arbol(0.65f, TipoArbol.COPA, 1.0f), Arbol(0.69f, TipoArbol.PINO, 0.8f),
+    Arbol(0.20f, TipoArbol.PINO, 0.8f), Arbol(0.29f, TipoArbol.COPA, 0.9f), Arbol(0.33f, TipoArbol.PINO, 1.0f),
+    Arbol(0.40f, TipoArbol.COPA, 1.0f), Arbol(0.45f, TipoArbol.PINO, 1.15f), Arbol(0.50f, TipoArbol.COPA, 0.85f),
+    Arbol(0.55f, TipoArbol.PINO, 0.95f), Arbol(0.61f, TipoArbol.PINO, 1.1f), Arbol(0.65f, TipoArbol.COPA, 1.0f), Arbol(0.69f, TipoArbol.PINO, 0.8f),
     Arbol(0.87f, TipoArbol.COPA, 1.0f), Arbol(0.92f, TipoArbol.PINO, 1.2f), Arbol(0.97f, TipoArbol.COPA, 0.9f),
 )
 
 private val ARBOLES_MEDIO = listOf(
     Arbol(0.04f, TipoArbol.PINO, 1.1f), Arbol(0.11f, TipoArbol.COPA, 1.0f), Arbol(0.18f, TipoArbol.ARBUSTO, 0.9f),
-    Arbol(0.40f, TipoArbol.COPA, 0.9f), Arbol(0.57f, TipoArbol.PINO, 1.0f),
-    Arbol(0.79f, TipoArbol.COPA, 1.15f), Arbol(0.86f, TipoArbol.PINO, 0.95f), Arbol(0.95f, TipoArbol.ARBUSTO, 1.0f),
+    Arbol(0.26f, TipoArbol.PINO, 0.9f), Arbol(0.33f, TipoArbol.COPA, 1.05f), Arbol(0.40f, TipoArbol.COPA, 0.9f),
+    Arbol(0.47f, TipoArbol.ARBUSTO, 1.0f), Arbol(0.51f, TipoArbol.COPA, 1.1f), Arbol(0.57f, TipoArbol.PINO, 1.0f),
+    Arbol(0.65f, TipoArbol.ARBUSTO, 0.9f), Arbol(0.71f, TipoArbol.PINO, 1.05f), Arbol(0.79f, TipoArbol.COPA, 1.15f), Arbol(0.86f, TipoArbol.PINO, 0.95f), Arbol(0.95f, TipoArbol.ARBUSTO, 1.0f),
 )
 
 private val ARBOLES_CERCA = listOf(
     Arbol(0.02f, TipoArbol.COPA, 1.2f), Arbol(0.09f, TipoArbol.ARBUSTO, 1.0f), Arbol(0.15f, TipoArbol.PASTO),
-    Arbol(0.26f, TipoArbol.PASTO, 0.9f), Arbol(0.35f, TipoArbol.ARBUSTO, 0.8f), Arbol(0.49f, TipoArbol.PASTO),
-    Arbol(0.63f, TipoArbol.ARBUSTO, 0.9f), Arbol(0.72f, TipoArbol.PASTO, 1.1f), Arbol(0.84f, TipoArbol.ARBUSTO, 1.1f),
+    Arbol(0.21f, TipoArbol.ARBUSTO, 0.9f), Arbol(0.26f, TipoArbol.PASTO, 0.9f), Arbol(0.35f, TipoArbol.ARBUSTO, 0.8f),
+    Arbol(0.42f, TipoArbol.COPA, 0.9f), Arbol(0.49f, TipoArbol.PASTO), Arbol(0.56f, TipoArbol.ARBUSTO, 1.0f),
+    Arbol(0.63f, TipoArbol.ARBUSTO, 0.9f), Arbol(0.72f, TipoArbol.PASTO, 1.1f), Arbol(0.78f, TipoArbol.COPA, 1.0f),
+    Arbol(0.84f, TipoArbol.ARBUSTO, 1.1f),
     Arbol(0.92f, TipoArbol.PINO, 1.1f), Arbol(0.98f, TipoArbol.PASTO, 0.9f),
 )
 
-private fun DrawScope.dibujarArbol(a: Arbol, colina: Colina, altoBase: Float, tono: TonoArbol, t: Float, luz: Float, tarde: Float) {
-    val x = a.x * size.width
+private fun DrawScope.dibujarArbol(a: Arbol, x: Float, colina: Colina, altoBase: Float, tono: TonoArbol, t: Float, luz: Float, tarde: Float) {
+    if (x < -altoBase || x > size.width + altoBase) return
     val suelo = sueloEn(colina, x) + altoBase * 0.06f      // un poco enterrado, para que no flote
     val alto = altoBase * a.escala
     val brisa = sin(t * 0.9f + a.fase) * alto * 0.035f      // vaivén muy leve de la copa
@@ -469,13 +543,14 @@ private fun DrawScope.dibujarNube(c: Offset, ancho: Float, color: Color) {
     drawPath(nube, color)
 }
 
-private fun DrawScope.colina(base: Float, amplitud: Float, frecuencia: Float, fase: Float, color: Color) {
+private fun DrawScope.colina(c: Colina, color: Color) {
     val w = size.width
+    val pasos = (40 * w / c.periodo).roundToInt().coerceAtLeast(40)
     val camino = Path().apply {
         moveTo(0f, size.height)
-        for (i in 0..40) {
-            val x = w * i / 40f
-            lineTo(x, base - amplitud * sin(i / 40f * PI.toFloat() * frecuencia + fase))
+        for (i in 0..pasos) {
+            val x = w * i / pasos
+            lineTo(x, sueloEn(c, x))
         }
         lineTo(w, size.height)
         close()
@@ -484,11 +559,34 @@ private fun DrawScope.colina(base: Float, amplitud: Float, frecuencia: Float, fa
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Canvas: caja 3D grande + etiquetas tocables con latido
+//  Canvas: caja 3D + tarjetas de datos que se pueden arrastrar
 // ─────────────────────────────────────────────────────────────
+private fun Parametro.clave(): String? = when (this) {
+    Parametro.Temperatura -> "temperatura"
+    Parametro.HumedadAire -> "humedadAire"
+    Parametro.Ventilador -> "ventilador"
+    Parametro.Ventana -> "ventana"
+    Parametro.Plantas -> null
+    Parametro.GestionPlantas -> null
+}
+
+private enum class Lado { IZQ, DER, ARRIBA, ABAJO }
+
+/** Una tarjeta de dato. [ladoPreferido]: por dónde entra la línea mientras la tarjeta está en su lugar automático. */
+private class Tarjeta(
+    val parametro: Parametro,
+    val clave: String,
+    val ancla: Offset,
+    val valor: String,
+    val titulo: String,
+    val columnaIzquierda: Boolean,
+    val ladoPreferido: Lado? = null
+)
+
 @Composable
 private fun EscenaInvernadero(
     lectura: LecturaEsp32?,
+    plantas: List<Float?>,
     tiempo: State<Float>,
     aspas: State<Float>,
     velocidad: State<Float>,
@@ -496,34 +594,83 @@ private fun EscenaInvernadero(
     paleta: Paleta,
     seleccionado: Parametro?,
     zonas: MutableList<ZonaToque>,
+    posiciones: Map<String, Offset>,
+    alMover: (String, Offset) -> Unit,
+    alSoltar: () -> Unit,
     alTocar: (ZonaToque?) -> Unit,
+    pista: State<Float>,
+    alInteractuar: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val medidor = rememberTextMeasurer()
     val alTocarActual by rememberUpdatedState(alTocar)
+    val alMoverActual by rememberUpdatedState(alMover)
+    val alSoltarActual by rememberUpdatedState(alSoltar)
+    val alInteractuarActual by rememberUpdatedState(alInteractuar)
+    // Tarjetas dibujadas en el último cuadro: clave → rectángulo (para arrastrarlas)
+    val arrastrables = remember { mutableListOf<Pair<String, Rect>>() }
+    var levantada by remember { mutableStateOf<String?>(null) }   // tarjeta que se está moviendo
+    val vibracion = LocalHapticFeedback.current
+
     Canvas(
-        modifier.pointerInput(Unit) {
-            detectTapGestures { pos -> alTocarActual(zonas.lastOrNull { it.area.contains(pos) }) }
-        }
+        modifier
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { },   // el toque mantenido es para mover, no abre el panel
+                    onTap = { pos -> alInteractuarActual(); alTocarActual(zonas.lastOrNull { it.area.contains(pos) }) }
+                )
+            }
+            .pointerInput(Unit) {
+                var clave: String? = null
+                var centro = Offset.Zero
+                // Se mueve solo con toque mantenido (~½ s): un roce o un desliz no cambia nada de lugar
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { pos ->
+                        alInteractuarActual()
+                        val toque = arrastrables.lastOrNull { it.second.inflate(6.dp.toPx()).contains(pos) }
+                        clave = toque?.first
+                        centro = toque?.second?.center ?: Offset.Zero
+                        if (clave != null) {
+                            levantada = clave
+                            vibracion.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    },
+                    onDragEnd = { if (clave != null) alSoltarActual(); clave = null; levantada = null },
+                    onDragCancel = { if (clave != null) alSoltarActual(); clave = null; levantada = null },
+                    onDrag = { cambio, desplazamiento ->
+                        val k = clave
+                        if (k != null) {
+                            cambio.consume()
+                            centro += desplazamiento
+                            alMoverActual(
+                                k,
+                                Offset((centro.x / size.width).coerceIn(0f, 1f), (centro.y / size.height).coerceIn(0f, 1f))
+                            )
+                        }
+                    }
+                )
+            }
     ) {
         if (lectura == null) {
             zonas.clear()
+            arrastrables.clear()
             val txt = medidor.measure("Esperando datos…", TextStyle(color = paleta.texto, fontSize = 16.sp, fontFamily = FuenteTexto))
             drawText(txt, topLeft = center - Offset(txt.size.width / 2f, txt.size.height / 2f))
             return@Canvas
         }
-        // La caja ocupa la mayor parte del ancho; las etiquetas flotan encima con su propio fondo
+        // La caja queda al centro y deja ver el paisaje alrededor (~2/3 del ancho útil);
+        // apenas a la derecha porque la ventana abierta sobresale a la izquierda.
+        // En horizontal la escena es baja y ancha: las tarjetas van a los costados
+        val apaisado = size.width > size.height * 1.25f
         val margen = 36.dp.toPx()
-        // La caja es la protagonista (~85% del ancho útil) y queda un poco sobre el centro: arriba van
-        // los datos de aire/ventilador/ventana y abajo la media luna con los sensores de tierra
-        val escala = min((size.width - 2 * margen) * 0.86f / 1.85f, size.height / 2.35f)
-        // un poco a la derecha (la ventana abierta sobresale a la izquierda)
-        val cam = Camara(YAW_GRADOS, PITCH_GRADOS, escala, Offset(size.width * 0.54f, size.height * 0.40f))
+        val escala = if (apaisado) min(size.width * 0.40f / 1.85f, size.height * 0.64f / 1.25f)
+                     else min((size.width - 2 * margen) * 0.68f / 1.85f, size.height / 3.0f)
+        val cam = Camara(YAW_GRADOS, PITCH_GRADOS, escala, Offset(size.width * 0.515f, size.height * 0.50f))
 
         val anclas = dibujarEscena(
             cam,
             DatosEscena(
-                humedades = lectura.humedades,
+                humedades = plantas,
                 temperatura = lectura.temperatura,
                 velocidadVentilador = velocidad.value,
                 anguloAspas = aspas.value,
@@ -533,209 +680,293 @@ private fun EscenaInvernadero(
             paleta
         )
 
-        val n = anclas.plantas.size
-        val plantas = anclas.plantas.mapIndexed { i, a ->
-            // Con pocas plantas cabe el estado del suelo; con muchas, solo el nombre (el estado sale al tocar)
-            val titulo = if (n <= 3) lectura.estadosSuelo.getOrNull(i) ?: "Planta ${i + 1}" else "Planta ${i + 1}"
-            Etiqueta(a, "${lectura.humedades[i].roundToInt()}%", titulo, Parametro.Planta(i))
-        }
         // La humedad del aire se mide "en el aire" de la caja: el punto flota arriba, sobre las plantas
         val anclaAire = cam.proyectar(Vec3(0.22f, 0.30f, -0.18f))
-        val laterales = listOfNotNull(
-            Etiqueta(anclas.temperatura, "%.1f °C".format(lectura.temperatura), "Temperatura", Parametro.Temperatura),
-            lectura.humedadAmbiente?.let {
-                Etiqueta(anclaAire, "${it.roundToInt()}%", "Humedad del aire", Parametro.HumedadAire, izquierda = false)
-            },
-            Etiqueta(
-                anclas.ventilador,
+        val tarjetas = listOfNotNull(
+            Tarjeta(Parametro.Ventana, "ventana", anclas.ventana, "${lectura.anguloVentana.roundToInt()}°",
+                "Ventana · ${lectura.modoVentana.lowercase()}", columnaIzquierda = true, ladoPreferido = Lado.IZQ),
+            Tarjeta(Parametro.Temperatura, "temperatura", anclas.temperatura, "%.1f °C".format(lectura.temperatura),
+                "Temperatura", columnaIzquierda = true),
+            Tarjeta(Parametro.Ventilador, "ventilador", anclas.ventilador,
                 if (lectura.ventiladorEncendido) "${(lectura.velocidadVentilador * 100).roundToInt()}%" else "OFF",
-                "Ventilador · ${lectura.modoVentilador.lowercase()}",
-                Parametro.Ventilador,
-                izquierda = false,
-                porFuera = true
-            ),
-            Etiqueta(anclas.ventana, "${lectura.anguloVentana.roundToInt()}°", "Ventana · ${lectura.modoVentana.lowercase()}", Parametro.Ventana, izquierda = true, porFuera = true),
+                "Ventilador · ${lectura.modoVentilador.lowercase()}", columnaIzquierda = false, ladoPreferido = Lado.DER),
+            lectura.humedadAmbiente?.let {
+                Tarjeta(Parametro.HumedadAire, "humedadAire", anclaAire, "${it.roundToInt()}%", "Humedad del aire", columnaIzquierda = false)
+            },
         )
         zonas.clear()
-        dibujarEtiquetas(laterales, medidor, paleta, tiempo.value, seleccionado, zonas, anclas.techo, desfase = n)
-        dibujarMediaLuna(plantas, medidor, paleta, tiempo.value, seleccionado, zonas, anclas.base)
+        arrastrables.clear()
+        val (insignia, botonMas) = dibujarInsigniaPlantas(
+            plantas.size, medidor, paleta, seleccionado == Parametro.Plantas, seleccionado == Parametro.GestionPlantas
+        )
+        zonas += ZonaToque(Parametro.Plantas, insignia.inflate(4.dp.toPx()))
+        zonas += ZonaToque(Parametro.GestionPlantas, botonMas.inflate(4.dp.toPx()))
+        val bloque = Rect(insignia.left, min(insignia.top, botonMas.top), botonMas.right, max(insignia.bottom, botonMas.bottom))
+        dibujarTarjetas(tarjetas, posiciones, medidor, paleta, tiempo.value, seleccionado, zonas, arrastrables, anclas.techo, bloque, apaisado, levantada, pista.value)
     }
-}
-
-/** [izquierda]: lado fijo de la tarjeta (null = el lado más cercano al objeto). */
-private data class Etiqueta(
-    val ancla: Offset,
-    val valor: String,
-    val titulo: String,
-    val parametro: Parametro,
-    val izquierda: Boolean? = null,
-    val porFuera: Boolean = false     // la línea entra por el borde exterior de la tarjeta (el del lado de la pantalla)
-)
-
-/** Círculo sobre el objeto → línea diagonal → línea horizontal → dato con fondo (estilo Paint). */
-private fun DrawScope.dibujarEtiquetas(
-    lista: List<Etiqueta>,
-    medidor: TextMeasurer,
-    p: Paleta,
-    t: Float,
-    seleccionado: Parametro?,
-    zonas: MutableList<ZonaToque>,
-    techo: Float,
-    desfase: Int = 0
-) {
-    val estiloValor = TextStyle(color = p.verde, fontSize = 19.sp, fontWeight = FontWeight.Bold, fontFamily = FuenteTitulos, fontFeatureSettings = "tnum")
-    val estiloTitulo = TextStyle(color = p.texto, fontSize = 11.sp, fontFamily = FuenteTexto, letterSpacing = 0.2.sp)
-    val margen = 6.dp.toPx()
-    val separacion = 52.dp.toPx()
-    val grosor = 1.6.dp.toPx()
-    val relleno = 8.dp.toPx()
-
-    lista.withIndex()
-        .groupBy { it.value.izquierda ?: (it.value.ancla.x < size.width / 2f) }
-        .forEach { (izquierda, grupo) ->
-            // Las etiquetas van en el cielo, SOBRE el techo de la caja, apiladas hacia arriba.
-            // El objeto más cercano al borde toma la fila más baja (si están casi alineados, el más bajo):
-            // así las líneas no se cruzan entre sí ni pasan bajo otras etiquetas.
-            val tramo = 40.dp.toPx()
-            fun distanciaAlBorde(e: Etiqueta) = ((if (izquierda) e.ancla.x else size.width - e.ancla.x) / tramo).toInt()
-            val orden = grupo.sortedWith(
-                compareBy<IndexedValue<Etiqueta>> { distanciaAlBorde(it.value) }.thenByDescending { it.value.ancla.y }
-            )
-            val ys = FloatArray(orden.size)
-            var maximo = techo - 30.dp.toPx()
-            orden.forEachIndexed { k, _ ->
-                ys[k] = maximo
-                maximo -= separacion
-            }
-            val falta = 30.dp.toPx() - (ys.lastOrNull() ?: 30.dp.toPx())
-            if (falta > 0f) for (k in ys.indices) ys[k] += falta
-
-            orden.forEachIndexed { k, (indice, e) ->
-                val elegido = e.parametro == seleccionado
-                val valor = medidor.measure(e.valor, estiloValor)
-                val titulo = medidor.measure(e.titulo, estiloTitulo)
-                val anchoTexto = max(valor.size.width, titulo.size.width).toFloat()
-                val y = ys[k]
-                val hueco = 6.dp.toPx()
-                // Con porFuera la tarjeta se corre hacia adentro para dejar un pasillo junto al borde de la pantalla
-                val pasillo = if (e.porFuera) 16.dp.toPx() else 0f
-                val xFin = if (izquierda) margen + pasillo + relleno + anchoTexto + hueco
-                           else size.width - margen - pasillo - relleno - anchoTexto - hueco
-                if (e.porFuera) {
-                    // objeto → hacia el borde → sube por el pasillo → entra por el lado exterior de la tarjeta
-                    val xPasillo = if (izquierda) margen + pasillo * 0.45f else size.width - margen - pasillo * 0.45f
-                    val xBorde = if (izquierda) margen + pasillo else size.width - margen - pasillo
-                    val ruta = Path().apply {
-                        moveTo(e.ancla.x, e.ancla.y)
-                        lineTo(xPasillo, e.ancla.y)
-                        lineTo(xPasillo, y)
-                        lineTo(xBorde, y)
-                    }
-                    drawPath(ruta, p.linea, style = Stroke(grosor, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-                } else {
-                    val dy = abs(e.ancla.y - y)
-                    val codoX = if (izquierda) max(e.ancla.x - dy * 0.6f, xFin + 8.dp.toPx())
-                                else min(e.ancla.x + dy * 0.6f, xFin - 8.dp.toPx())
-                    val codo = Offset(codoX, y)
-                    drawLine(p.linea, e.ancla, codo, grosor, StrokeCap.Round)
-                    drawLine(p.linea, codo, Offset(xFin, y), grosor, StrokeCap.Round)
-                }
-
-                // Fondo del dato (para leerlo aunque quede sobre la caja)
-                val xValor = if (izquierda) xFin - hueco - valor.size.width else xFin + hueco
-                val xTitulo = if (izquierda) xFin - hueco - titulo.size.width else xFin + hueco
-                val izq = min(xValor, xTitulo) - relleno
-                val der = max(xValor + valor.size.width, xTitulo + titulo.size.width) + relleno
-                val bloque = Rect(izq, y - valor.size.height - relleno * 0.6f, der, y + titulo.size.height + relleno)
-                drawRoundRect(p.tarjeta, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()))
-                if (elegido) {
-                    drawRoundRect(p.verde, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()), style = Stroke(2.dp.toPx()))
-                }
-                drawText(valor, topLeft = Offset(xValor, y - valor.size.height))
-                drawText(titulo, topLeft = Offset(xTitulo, y + 1.dp.toPx()))
-
-                dibujarLatido(e.ancla, t + (indice + desfase) * 0.37f, p, elegido)
-
-                // Zonas tocables: el bloque de texto y el círculo
-                zonas += ZonaToque(e.parametro, bloque.inflate(6.dp.toPx()))
-                zonas += ZonaToque(e.parametro, Rect(e.ancla, 22.dp.toPx()))
-            }
-        }
 }
 
 /**
- * Sensores de tierra: tarjetas repartidas en media luna bajo la caja (medio óvalo, separadas por
- * igual a lo largo del arco). Se ordenan según dónde está cada sensor, de izquierda a derecha,
- * para que las líneas no se crucen; cada línea termina en el borde de su tarjeta.
+ * Tarjetas + líneas. Cada tarjeta está donde la dejó el usuario (o en su lugar automático, apiladas
+ * sobre el techo: ventana y temperatura a la izquierda, ventilador y humedad a la derecha).
+ * Cada línea busca el camino más corto que rodea las demás tarjetas (y la propia, para entrar por su lado).
  */
-private fun DrawScope.dibujarMediaLuna(
-    lista: List<Etiqueta>,
+private fun DrawScope.dibujarTarjetas(
+    lista: List<Tarjeta>,
+    posiciones: Map<String, Offset>,
     medidor: TextMeasurer,
     p: Paleta,
     t: Float,
     seleccionado: Parametro?,
     zonas: MutableList<ZonaToque>,
-    base: Float
+    arrastrables: MutableList<Pair<String, Rect>>,
+    techo: Float,
+    insignia: Rect,
+    apaisado: Boolean,
+    levantada: String?,
+    pista: Float
 ) {
-    if (lista.isEmpty()) return
-    val n = lista.size
     val estiloValor = TextStyle(color = p.verde, fontSize = 19.sp, fontWeight = FontWeight.Bold, fontFamily = FuenteTitulos, fontFeatureSettings = "tnum")
     val estiloTitulo = TextStyle(color = p.texto, fontSize = 11.sp, fontFamily = FuenteTexto, letterSpacing = 0.2.sp)
-    val relleno = 8.dp.toPx()
+    val relleno = 9.dp.toPx()
+    val borde = 6.dp.toPx()
+    val holgura = 9.dp.toPx()          // cuánto se aparta una línea de las tarjetas que rodea
+    val pasillo = holgura + 14.dp.toPx() // espacio junto al borde para que entre la línea por fuera
+    val separacion = 58.dp.toPx()
     val grosor = 1.6.dp.toPx()
-    val margen = 8.dp.toPx()
+
     val textos = lista.map { medidor.measure(it.valor, estiloValor) to medidor.measure(it.titulo, estiloTitulo) }
-    val tamanos = textos.map { (v, ti) -> Size(max(v.size.width, ti.size.width) + 2 * relleno, v.size.height + ti.size.height + relleno * 1.6f) }
-    val anchoMax = tamanos.maxOf { it.width }
-    val altoMax = tamanos.maxOf { it.height }
+    val tamanos = textos.map { (v, ti) -> Size(max(v.size.width, ti.size.width) + 2 * relleno, v.size.height + ti.size.height + relleno * 1.5f) }
 
-    // Medio óvalo: extremos justo bajo la caja, el punto más bajo cerca del borde inferior
-    val cx = size.width / 2f
-    val rx = (size.width / 2f - margen - anchoMax / 2f).coerceAtLeast(0f)
-    val yExtremos = base + 14.dp.toPx() + altoMax / 2f
-    val ry = (size.height - margen - altoMax / 2f - yExtremos).coerceIn(0f, rx * 0.8f)
-    val muestras = 72
-    val pts = List(muestras + 1) { k ->
-        val th = PI.toFloat() * k / muestras
-        Offset(cx - rx * cos(th), yExtremos + ry * sin(th))
+    // 1. Lugar automático: columnas a cada lado, la primera de cada columna más abajo
+    val automatico = arrayOfNulls<Offset>(lista.size)
+    for (izquierda in listOf(true, false)) {
+        val columna = lista.indices.filter { lista[it].columnaIzquierda == izquierda }
+        // Vertical: apiladas sobre el techo. Horizontal: centradas a la altura de la caja, junto a los bordes.
+        var y = if (apaisado) size.height / 2f + (columna.size - 1) * separacion / 2f + tamanos.maxOf { it.height } / 2f
+                else techo - 34.dp.toPx()
+        val ys = columna.map { i -> (y - tamanos[i].height / 2f).also { y -= separacion } }
+        val falta = borde - ((ys.lastOrNull() ?: borde) - (columna.lastOrNull()?.let { tamanos[it].height / 2f } ?: 0f))
+        columna.forEachIndexed { k, i ->
+            val tam = tamanos[i]
+            val porFuera = lista[i].ladoPreferido == (if (izquierda) Lado.IZQ else Lado.DER)
+            val x = if (izquierda) borde + (if (porFuera) pasillo else 0f) + tam.width / 2f
+                    else size.width - borde - (if (porFuera) pasillo else 0f) - tam.width / 2f
+            automatico[i] = Offset(x, ys[k] + max(0f, falta))
+        }
     }
-    val acumulado = FloatArray(muestras + 1)
-    for (k in 1..muestras) acumulado[k] = acumulado[k - 1] + (pts[k] - pts[k - 1]).getDistance()
-    val total = acumulado[muestras]
-    fun enArco(f: Float): Offset {
-        val objetivo = f * total
-        var k = 1
-        while (k < muestras && acumulado[k] < objetivo) k++
-        val tramo = (acumulado[k] - acumulado[k - 1]).coerceAtLeast(0.001f)
-        return lerpOffset(pts[k - 1], pts[k], ((objetivo - acumulado[k - 1]) / tramo).coerceIn(0f, 1f))
-    }
-    val centros = arrayOfNulls<Offset>(n)
-    lista.indices.sortedBy { lista[it].ancla.x }.forEachIndexed { pos, i -> centros[i] = enArco((pos + 0.5f) / n) }
 
-    // Primero todas las líneas (así ninguna pasa por encima de otra tarjeta), luego las tarjetas
-    lista.forEachIndexed { i, e ->
-        val c = centros[i]!!
-        val d = e.ancla - c
-        val s = min(
-            if (abs(d.x) > 0.01f) tamanos[i].width / 2f / abs(d.x) else Float.MAX_VALUE,
-            if (abs(d.y) > 0.01f) tamanos[i].height / 2f / abs(d.y) else Float.MAX_VALUE
-        ).coerceAtMost(1f)
-        drawLine(p.linea, e.ancla, c + d * s, grosor, StrokeCap.Round)
-    }
-    lista.forEachIndexed { i, e ->
-        val c = centros[i]!!
-        val (valor, titulo) = textos[i]
+    // 2. Rectángulos finales (dentro de la escena)
+    val rectsBase = lista.mapIndexed { i, e ->
         val tam = tamanos[i]
-        val bloque = Rect(c.x - tam.width / 2f, c.y - tam.height / 2f, c.x + tam.width / 2f, c.y + tam.height / 2f)
-        val elegido = e.parametro == seleccionado
-        drawRoundRect(p.tarjeta, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()))
-        if (elegido) drawRoundRect(p.verde, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()), style = Stroke(2.dp.toPx()))
-        drawText(valor, topLeft = Offset(c.x - valor.size.width / 2f, bloque.top + relleno * 0.8f))
-        drawText(titulo, topLeft = Offset(c.x - titulo.size.width / 2f, bloque.top + relleno * 0.8f + valor.size.height))
-        dibujarLatido(e.ancla, t + i * 0.37f, p, elegido)
-        zonas += ZonaToque(e.parametro, bloque.inflate(4.dp.toPx()))
-        zonas += ZonaToque(e.parametro, Rect(e.ancla, 22.dp.toPx()))
+        val c = posiciones[e.clave]?.let { Offset(it.x * size.width, it.y * size.height) } ?: automatico[i]!!
+        val cx = c.x.coerceIn(borde + tam.width / 2f, max(borde + tam.width / 2f, size.width - borde - tam.width / 2f))
+        val cy = c.y.coerceIn(borde + tam.height / 2f, max(borde + tam.height / 2f, size.height - borde - tam.height / 2f))
+        Rect(Offset(cx - tam.width / 2f, cy - tam.height / 2f), tam)
     }
+
+    // Pista: una tarjeta muestra el gesto (se mantiene presionada → se levanta y se desplaza un poco, ida y vuelta)
+    val objetivo = if (pista > 0.01f && lista.isNotEmpty()) lista.indexOfFirst { it.clave == "temperatura" }.coerceAtLeast(0) else -1
+    val ciclo = (t % 2.6f) / 2.6f
+    val presion = (ciclo / 0.4f).coerceIn(0f, 1f)
+    val arrastre = sin(((ciclo - 0.42f) / 0.4f).coerceIn(0f, 1f) * PI.toFloat())
+    val rects = rectsBase.mapIndexed { i, r ->
+        if (i != objetivo) r
+        else r.translate(Offset((if (r.center.x > size.width / 2f) -1f else 1f) * 22.dp.toPx(), -6.dp.toPx()) * (arrastre * pista))
+    }
+    val limites = Rect(0f, 0f, size.width, size.height)
+
+    // 3. Líneas (todas primero, así ninguna queda encima de una tarjeta)
+    lista.forEachIndexed { i, e ->
+        val r = rects[i]
+        val movida = posiciones.containsKey(e.clave)
+        val lado = (if (movida) null else e.ladoPreferido) ?: ladoHacia(r, e.ancla)
+        val (entrada, normal) = when (lado) {
+            Lado.IZQ -> r.centerLeft to Offset(-1f, 0f)
+            Lado.DER -> r.centerRight to Offset(1f, 0f)
+            Lado.ARRIBA -> r.topCenter to Offset(0f, -1f)
+            Lado.ABAJO -> r.bottomCenter to Offset(0f, 1f)
+        }
+        val acercamiento = entrada + normal * (holgura + 5.dp.toPx())
+        val obstaculos = (rects.map { it.inflate(holgura) } + insignia.inflate(holgura))
+            .filterNot { it.contains(e.ancla) || it.contains(acercamiento) }
+        val camino = rutaLibre(e.ancla, acercamiento, obstaculos, limites) + entrada
+        val trazo = Path().apply {
+            moveTo(camino[0].x, camino[0].y)
+            for (k in 1 until camino.size) lineTo(camino[k].x, camino[k].y)
+        }
+        drawPath(trazo, p.linea, style = Stroke(grosor, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    }
+
+    // 4. Tarjetas y puntos que laten
+    lista.forEachIndexed { i, e ->
+        val r = rects[i]
+        val (valor, titulo) = textos[i]
+        val elegido = e.parametro == seleccionado
+        val enAlto = e.clave == levantada || (i == objetivo && arrastre > 0.05f)
+        if (enAlto) {
+            // Levantada: sombra suave debajo y borde, para que se note que se está moviendo
+            drawRoundRect(Color.Black.copy(alpha = 0.18f), r.topLeft + Offset(0f, 4.dp.toPx()), r.size, CornerRadius(14.dp.toPx()))
+        }
+        drawRoundRect(p.tarjeta, r.topLeft, r.size, CornerRadius(14.dp.toPx()))
+        if (enAlto) drawRoundRect(p.linea, r.topLeft, r.size, CornerRadius(14.dp.toPx()), style = Stroke(1.5.dp.toPx()))
+        if (elegido) drawRoundRect(p.verde, r.topLeft, r.size, CornerRadius(14.dp.toPx()), style = Stroke(2.dp.toPx()))
+        drawText(valor, topLeft = Offset(r.left + relleno, r.top + relleno * 0.75f))
+        drawText(titulo, topLeft = Offset(r.left + relleno, r.top + relleno * 0.75f + valor.size.height))
+        dibujarLatido(e.ancla, t + i * 0.37f, p, elegido)
+
+        zonas += ZonaToque(e.parametro, r.inflate(6.dp.toPx()))
+        zonas += ZonaToque(e.parametro, Rect(e.ancla, 22.dp.toPx()))
+        arrastrables += e.clave to r
+    }
+    if (objetivo >= 0) dibujarPista(rects[objetivo], rectsBase[objetivo], medidor, p, presion, arrastre, pista)
+}
+
+/**
+ * Pista del gesto para mover tarjetas: un "dedo" sobre la tarjeta con un anillo que se llena
+ * (toque mantenido) y un globo con el texto. [dedo]: tarjeta animada; [globo]: dónde está en reposo.
+ */
+private fun DrawScope.dibujarPista(dedo: Rect, globo: Rect, medidor: TextMeasurer, p: Paleta, presion: Float, arrastre: Float, alfa: Float) {
+    val radio = 16.dp.toPx()
+    val c = dedo.center
+    drawCircle(Color.White.copy(alpha = 0.45f * alfa), radio * (1f - 0.15f * presion), c)
+    drawCircle(p.linea.copy(alpha = 0.35f * alfa), radio, c, style = Stroke(2.dp.toPx()))
+    if (arrastre < 0.05f) {
+        drawArc(
+            p.verde.copy(alpha = alfa), -90f, 360f * presion, false,
+            Offset(c.x - radio, c.y - radio), Size(radio * 2f, radio * 2f),
+            style = Stroke(3.dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+
+    val relleno = 12.dp.toPx()
+    val flecha = 7.dp.toPx()
+    val anchoMax = min(size.width - 24.dp.toPx(), 230.dp.toPx())
+    val estilo = TextStyle(color = p.textoBoton, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, fontFamily = FuenteTexto)
+    val texto = medidor.measure(
+        "Mantén presionada una tarjeta para moverla", estilo,
+        constraints = Constraints(maxWidth = (anchoMax - 2f * relleno).roundToInt().coerceAtLeast(1))
+    )
+    val tam = Size(texto.size.width + relleno * 2f, texto.size.height + relleno * 1.4f)
+    val debajo = globo.bottom + flecha + 6.dp.toPx() + tam.height < size.height - 64.dp.toPx()   // libre la hoja de plantas
+    val x = (globo.center.x - tam.width / 2f).coerceIn(8.dp.toPx(), max(8.dp.toPx(), size.width - 8.dp.toPx() - tam.width))
+    val y = if (debajo) globo.bottom + flecha + 6.dp.toPx() else globo.top - flecha - 6.dp.toPx() - tam.height
+    val fondo = p.botonActivo.copy(alpha = 0.95f * alfa)
+    drawRoundRect(fondo, Offset(x, y), tam, CornerRadius(12.dp.toPx()))
+    val px = globo.center.x.coerceIn(x + 16.dp.toPx(), x + tam.width - 16.dp.toPx())
+    val pico = Path().apply {
+        if (debajo) { moveTo(px - flecha, y); lineTo(px, y - flecha); lineTo(px + flecha, y) }
+        else { moveTo(px - flecha, y + tam.height); lineTo(px, y + tam.height + flecha); lineTo(px + flecha, y + tam.height) }
+        close()
+    }
+    drawPath(pico, fondo)
+    drawText(texto, topLeft = Offset(x + relleno, y + relleno * 0.7f), alpha = alfa)
+}
+
+/** Lado de la tarjeta que mira hacia el objeto. */
+private fun ladoHacia(r: Rect, a: Offset): Lado {
+    val dx = (a.x - r.center.x) / (r.width / 2f).coerceAtLeast(1f)
+    val dy = (a.y - r.center.y) / (r.height / 2f).coerceAtLeast(1f)
+    return if (abs(dx) > abs(dy)) (if (dx < 0f) Lado.IZQ else Lado.DER) else (if (dy < 0f) Lado.ARRIBA else Lado.ABAJO)
+}
+
+/**
+ * Camino más corto de [desde] a [hasta] que no atraviesa ningún obstáculo: grafo de visibilidad con
+ * las esquinas de los obstáculos (ya agrandados con su holgura) y Dijkstra. Sin camino → línea recta.
+ */
+private fun rutaLibre(desde: Offset, hasta: Offset, obstaculos: List<Rect>, limites: Rect): List<Offset> {
+    val nodos = ArrayList<Offset>(2 + obstaculos.size * 4).apply {
+        add(desde); add(hasta)
+        for (o in obstaculos) { add(o.topLeft); add(o.topRight); add(o.bottomLeft); add(o.bottomRight) }
+    }
+    val n = nodos.size
+    val usable = BooleanArray(n) { i ->
+        i < 2 || (limites.contains(nodos[i]) && obstaculos.none { it.deflate(0.5f).contains(nodos[i]) })
+    }
+    val dist = FloatArray(n) { Float.MAX_VALUE }
+    val previo = IntArray(n) { -1 }
+    val listo = BooleanArray(n)
+    dist[0] = 0f
+    while (true) {
+        var u = -1
+        for (i in 0 until n) if (usable[i] && !listo[i] && dist[i] < Float.MAX_VALUE && (u == -1 || dist[i] < dist[u])) u = i
+        if (u == -1 || u == 1) break
+        listo[u] = true
+        for (v in 0 until n) {
+            if (!usable[v] || listo[v] || v == u) continue
+            if (obstaculos.any { cruza(nodos[u], nodos[v], it) }) continue
+            val d = dist[u] + (nodos[v] - nodos[u]).getDistance()
+            if (d < dist[v]) { dist[v] = d; previo[v] = u }
+        }
+    }
+    if (dist[1] == Float.MAX_VALUE) return listOf(desde, hasta)
+    val camino = ArrayList<Offset>()
+    var k = 1
+    while (k != -1) { camino.add(nodos[k]); k = previo[k] }
+    return camino.asReversed()
+}
+
+/** ¿El segmento a–b pasa por DENTRO del rectángulo? (tocar el borde no cuenta). Liang–Barsky. */
+private fun cruza(a: Offset, b: Offset, r: Rect): Boolean {
+    val s = r.deflate(0.5f)
+    if (s.width <= 0f || s.height <= 0f) return false
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    val p = floatArrayOf(-dx, dx, -dy, dy)
+    val q = floatArrayOf(a.x - s.left, s.right - a.x, a.y - s.top, s.bottom - a.y)
+    var t0 = 0f
+    var t1 = 1f
+    for (i in 0..3) {
+        if (p[i] == 0f) {
+            if (q[i] < 0f) return false
+        } else {
+            val tt = q[i] / p[i]
+            if (p[i] < 0f) { if (tt > t1) return false; if (tt > t0) t0 = tt }
+            else { if (tt < t0) return false; if (tt < t1) t1 = tt }
+        }
+    }
+    return t0 < t1
+}
+
+/** Esquina inferior izquierda: hoja + cantidad de plantas, y al lado el botón "+". Devuelve ambos rectángulos. */
+private fun DrawScope.dibujarInsigniaPlantas(
+    cantidad: Int, medidor: TextMeasurer, p: Paleta, elegido: Boolean, masElegido: Boolean
+): Pair<Rect, Rect> {
+    val estilo = TextStyle(color = p.texto, fontSize = 18.sp, fontWeight = FontWeight.Bold, fontFamily = FuenteTitulos, fontFeatureSettings = "tnum")
+    val numero = medidor.measure("$cantidad", estilo)
+    val icono = 22.dp.toPx()
+    val relleno = 10.dp.toPx()
+    val alto = max(icono, numero.size.height.toFloat()) + relleno * 1.4f
+    val ancho = relleno + icono + 6.dp.toPx() + numero.size.width + relleno * 1.2f
+    val r = Rect(Offset(6.dp.toPx(), size.height - 6.dp.toPx() - alto), Size(ancho, alto))
+    drawRoundRect(p.tarjeta, r.topLeft, r.size, CornerRadius(alto / 2f))
+    if (elegido) drawRoundRect(p.verde, r.topLeft, r.size, CornerRadius(alto / 2f), style = Stroke(2.dp.toPx()))
+    dibujarHoja(Offset(r.left + relleno, r.center.y - icono / 2f), icono, p.verde, p.tarjeta)
+    drawText(numero, topLeft = Offset(r.left + relleno + icono + 6.dp.toPx(), r.center.y - numero.size.height / 2f))
+
+    // Botón "+": añadir o quitar plantas
+    val mas = Rect(Offset(r.right + 8.dp.toPx(), r.top), Size(alto, alto))
+    drawCircle(p.botonActivo, alto / 2f, mas.center)
+    if (masElegido) drawCircle(p.verde, alto / 2f, mas.center, style = Stroke(2.dp.toPx()))
+    val brazo = alto * 0.22f
+    drawLine(p.textoBoton, mas.center - Offset(brazo, 0f), mas.center + Offset(brazo, 0f), 2.5.dp.toPx(), StrokeCap.Round)
+    drawLine(p.textoBoton, mas.center - Offset(0f, brazo), mas.center + Offset(0f, brazo), 2.5.dp.toPx(), StrokeCap.Round)
+    return r to mas
+}
+
+/** Hoja dibujada a mano: lámina curva, nervio central y tallo. */
+private fun DrawScope.dibujarHoja(o: Offset, s: Float, color: Color, nervio: Color) {
+    val base = Offset(o.x + s * 0.18f, o.y + s * 0.82f)
+    val punta = Offset(o.x + s * 0.92f, o.y + s * 0.08f)
+    val hoja = Path().apply {
+        moveTo(base.x, base.y)
+        cubicTo(o.x + s * 0.08f, o.y + s * 0.38f, o.x + s * 0.46f, o.y + s * 0.06f, punta.x, punta.y)
+        cubicTo(o.x + s * 0.94f, o.y + s * 0.54f, o.x + s * 0.62f, o.y + s * 0.92f, base.x, base.y)
+        close()
+    }
+    drawPath(hoja, color)
+    drawLine(nervio, lerpOffset(base, punta, 0.08f), lerpOffset(base, punta, 0.82f), s * 0.06f, StrokeCap.Round)
+    drawLine(color, base, Offset(o.x + s * 0.02f, o.y + s * 0.98f), s * 0.09f, StrokeCap.Round)
 }
 
 /** Latido lento y suave (≈ 2,4 s por ciclo, doble pulso) con una onda que se desvanece. */
@@ -781,7 +1012,11 @@ private fun PanelFlotante(area: Rect, contenido: @Composable () -> Unit) {
 private fun PanelModificador(
     parametro: Parametro,
     l: LecturaEsp32,
+    plantas: List<PlantaVisible>,
+    quitadas: Set<Int>,
     puedeActivar: Boolean,
+    puedeRenombrar: Boolean,
+    nombres: List<String>,
     c: Contenedor,
     alCerrar: () -> Unit
 ) {
@@ -790,20 +1025,40 @@ private fun PanelModificador(
     var enviando by remember { mutableStateOf(false) }
     val habilitado = puedeActivar && !enviando
 
-    fun enviar(vararg codigos: String) {
+    // Lo pedido se ve al instante (sin volver al valor anterior mientras el ESP32 confirma)
+    val pedidoEncendido = rememberPedido<Boolean>()
+    val pedidoPwm = rememberPedido<Float>()
+    val pedidoApertura = rememberPedido<Float>()
+
+    fun enviar(vararg codigos: String, siFalla: () -> Unit = {}) {
         if (enviando) return
         scope.launch {
             enviando = true
             aviso = "Enviando…"
             var ok = true
-            for (cod in codigos) if (!c.conexion.enviar(cod)) ok = false
+            for (cod in codigos) if (!c.conexion.enviar(cod)) { ok = false; break }
             enviando = false
+            if (!ok) siFalla()
             aviso = if (ok) "Enviado: " + codigos.joinToString(" + ") { Comandos.descripcion(it) } else "No se pudo enviar. Revisa la conexión."
         }
     }
+    fun auditar(detalle: String) {
+        val quien = c.sesion.usuario.value?.nombre ?: "?"
+        scope.launch(Dispatchers.IO) { c.db.auditar(quien, "AJUSTES", detalle, "OK") }
+    }
+    fun pedirPwm(objetivo: Float, codigo: String) {
+        pedidoPwm.valor = objetivo.coerceIn(0f, 255f)
+        pedidoEncendido.valor = objetivo > 0f
+        enviar(codigo) { pedidoPwm.valor = null; pedidoEncendido.valor = null }
+    }
+    fun pedirApertura(objetivo: Float, codigo: String) {
+        pedidoApertura.valor = objetivo
+        enviar(codigo) { pedidoApertura.valor = null }
+    }
 
     val titulo = when (parametro) {
-        is Parametro.Planta -> "Planta ${parametro.indice + 1}"
+        Parametro.Plantas -> "Plantas (${plantas.size})"
+        Parametro.GestionPlantas -> "Añadir o quitar plantas"
         Parametro.Temperatura -> "Temperatura"
         Parametro.HumedadAire -> "Humedad del aire"
         Parametro.Ventilador -> "Ventilador"
@@ -811,10 +1066,11 @@ private fun PanelModificador(
     }
     val verde = MaterialTheme.colorScheme.secondary
 
-    ElevatedCard(
+    // Un poco translúcido: se alcanza a ver la escena detrás
+    Card(
         shape = MaterialTheme.shapes.extraLarge,
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.86f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {
         Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -823,15 +1079,34 @@ private fun PanelModificador(
             }
             Column(Modifier.padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (parametro) {
-                    is Parametro.Planta -> {
-                        val h = l.humedades.getOrNull(parametro.indice) ?: 0f
-                        Text("${h.roundToInt()}% de humedad de suelo", color = verde, style = MaterialTheme.typography.headlineSmall)
-                        LinearProgressIndicator(progress = { h / 100f }, modifier = Modifier.fillMaxWidth(), color = verde)
-                        Text(l.estadosSuelo.getOrNull(parametro.indice) ?: "", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "Este valor solo se monitorea: el ESP32 no tiene bomba de riego conectada.",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Parametro.GestionPlantas -> GestionPlantas(
+                        plantas, quitadas, l.humedades.size, nombres, puedeRenombrar,
+                        alAnadir = {
+                            if (c.plantas.anadir(plantas.size)) {
+                                aviso = "Planta añadida. Conecta su sensor al ESP32 y aparecerá sola."
+                                auditar("Planta añadida (espera su sensor)")
+                            } else aviso = "Máximo ${PlantasRepo.MAX_PLANTAS} plantas."
+                        },
+                        alQuitar = { pl ->
+                            val nombre = nombrePlanta(nombres, pl.indice)
+                            if (pl.humedad == null) c.plantas.quitarEsperando(pl.indice, l.humedades.size) else c.plantas.quitar(pl.indice)
+                            aviso = "Quitaste \"$nombre\"."
+                            auditar("Planta quitada: \"$nombre\"")
+                        },
+                        alRestaurar = { i ->
+                            c.plantas.restaurar(i)
+                            aviso = null
+                            auditar("Planta vuelve a mostrarse: \"${nombrePlanta(nombres, i)}\"")
+                        }
+                    )
+
+                    Parametro.Plantas -> ListaPlantas(plantas, nombres, puedeRenombrar) { i, nombre ->
+                        val anterior = nombrePlanta(nombres, i)
+                        val nuevo = c.plantas.renombrar(i, nombre)
+                        val quien = c.sesion.usuario.value?.nombre ?: "?"
+                        scope.launch(Dispatchers.IO) {
+                            c.db.auditar(quien, "AJUSTES", "Planta ${i + 1}: \"$anterior\" → \"${nuevo.ifBlank { "Planta ${i + 1}" }}\"", "OK")
+                        }
                     }
 
                     Parametro.Temperatura -> {
@@ -844,7 +1119,10 @@ private fun PanelModificador(
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = { enviar(Comandos.MAXIMO, Comandos.ABRIR) }, enabled = habilitado) { Text("Ventilar") }
+                            FilledTonalButton(onClick = {
+                                pedidoPwm.valor = 255f; pedidoEncendido.valor = true; pedidoApertura.valor = 90f
+                                enviar(Comandos.MAXIMO, Comandos.ABRIR) { pedidoPwm.valor = null; pedidoEncendido.valor = null; pedidoApertura.valor = null }
+                            }, enabled = habilitado) { Text("Ventilar") }
                             OutlinedButton(onClick = { enviar(Comandos.AUTOMATICO) }, enabled = habilitado) { Text("Automático") }
                         }
                     }
@@ -863,24 +1141,26 @@ private fun PanelModificador(
 
                     Parametro.Ventilador -> {
                         var arrastre by remember { mutableStateOf<Float?>(null) }
-                        val pwm = arrastre ?: (l.velocidadVentilador * 255f)
+                        val confirmado = pedidoPwm.mostrar(l.velocidadVentilador * 255f) { a, b -> abs(a - b) <= 3f }
+                        val pwm = arrastre ?: confirmado
+                        val encendido = pedidoEncendido.mostrar(l.ventiladorEncendido)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
-                                Text(if (l.ventiladorEncendido) "Encendido" else "Apagado", style = MaterialTheme.typography.bodyLarge)
+                                Text(if (encendido) "Encendido" else "Apagado", style = MaterialTheme.typography.bodyLarge)
                                 Text("Modo ${l.modoVentilador.lowercase()}", style = MaterialTheme.typography.bodySmall)
                             }
                             Switch(
-                                checked = l.ventiladorEncendido,
-                                onCheckedChange = { enviar(if (it) Comandos.MAXIMO else Comandos.APAGAR) },
+                                checked = encendido,
+                                onCheckedChange = { pedirPwm(if (it) 255f else 0f, if (it) Comandos.MAXIMO else Comandos.APAGAR) },
                                 enabled = habilitado
                             )
                         }
-                        Text("Velocidad: ${(pwm / 2.55f).roundToInt()}%  (PWM ${pwm.roundToInt()})", color = verde)
+                        Text("Velocidad: ${(pwm / 2.55f).roundToInt()}%", color = verde)
                         Slider(
                             value = pwm,
                             onValueChange = { arrastre = it },
                             onValueChangeFinished = {
-                                arrastre?.let { enviar(Comandos.velocidad(it.roundToInt())) }
+                                arrastre?.let { pedirPwm(it, Comandos.velocidad(it.roundToInt())) }
                                 arrastre = null
                             },
                             valueRange = 0f..255f,
@@ -891,14 +1171,15 @@ private fun PanelModificador(
 
                     Parametro.Ventana -> {
                         var arrastre by remember { mutableStateOf<Float?>(null) }
-                        val apertura = arrastre ?: l.anguloVentana
+                        val confirmada = pedidoApertura.mostrar(l.anguloVentana) { a, b -> abs(a - b) <= 2f }
+                        val apertura = arrastre ?: confirmada
                         Text("Apertura: ${apertura.roundToInt()}° de 90°", color = verde, style = MaterialTheme.typography.titleMedium)
                         Text("Modo ${l.modoVentana.lowercase()}", style = MaterialTheme.typography.bodySmall)
                         Slider(
                             value = apertura,
                             onValueChange = { arrastre = it },
                             onValueChangeFinished = {
-                                arrastre?.let { enviar(Comandos.ventana(it.roundToInt())) }
+                                arrastre?.let { pedirApertura(it, Comandos.ventana(it.roundToInt())) }
                                 arrastre = null
                             },
                             valueRange = 0f..90f,
@@ -906,17 +1187,140 @@ private fun PanelModificador(
                             enabled = habilitado
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { enviar(Comandos.CERRAR) }, enabled = habilitado) { Text("Cerrar") }
-                            Button(onClick = { enviar(Comandos.ABRIR) }, enabled = habilitado) { Text("Abrir") }
+                            OutlinedButton(onClick = { pedirApertura(0f, Comandos.CERRAR) }, enabled = habilitado) { Text("Cerrar") }
+                            Button(onClick = { pedirApertura(90f, Comandos.ABRIR) }, enabled = habilitado) { Text("Abrir") }
                         }
                         TextButton(onClick = { enviar(Comandos.AUTOMATICO) }, enabled = habilitado) { Text("Volver a automático") }
                     }
                 }
-                if (!puedeActivar && parametro !is Parametro.Planta && parametro != Parametro.HumedadAire) {
+                if (!puedeActivar && parametro != Parametro.Plantas && parametro != Parametro.GestionPlantas && parametro != Parametro.HumedadAire) {
                     Text("Tu rol solo permite ver los datos.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 aviso?.let { Text(it, style = MaterialTheme.typography.labelMedium) }
             }
+        }
+    }
+}
+
+/** Cada planta (un sensor de suelo): su nombre, humedad y estado; se puede renombrar. */
+@Composable
+private fun ListaPlantas(plantas: List<PlantaVisible>, nombres: List<String>, puedeRenombrar: Boolean, alRenombrar: (Int, String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var editando by remember { mutableStateOf<Int?>(null) }
+    var texto by remember { mutableStateOf("") }
+    Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        plantas.forEach { pl ->
+            val i = pl.indice
+            val h = pl.humedad
+            if (editando == i) {
+                OutlinedTextField(
+                    value = texto,
+                    onValueChange = { texto = it.take(PlantasRepo.MAX_LARGO) },
+                    label = { Text("Nombre de la planta ${i + 1}") },
+                    placeholder = { Text("Ej.: Tomate cherry") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { alRenombrar(i, texto); editando = null }),
+                    trailingIcon = {
+                        IconButton(onClick = { alRenombrar(i, texto); editando = null }) {
+                            Icon(Icons.Filled.Check, contentDescription = "Guardar nombre")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(nombrePlanta(nombres, i), style = MaterialTheme.typography.titleSmall)
+                        Text(if (h == null) "Esperando sensor" else pl.estado.orEmpty(), style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    }
+                    if (h != null) Text("${h.roundToInt()}%", style = MaterialTheme.typography.titleMedium, color = cs.secondary)
+                    if (puedeRenombrar) {
+                        IconButton(onClick = { texto = nombres.getOrNull(i).orEmpty(); editando = i }) {
+                            Icon(Icons.Filled.Edit, contentDescription = "Renombrar ${nombrePlanta(nombres, i)}")
+                        }
+                    }
+                }
+                if (h != null) LinearProgressIndicator(progress = { h / 100f }, modifier = Modifier.fillMaxWidth(), color = cs.secondary)
+            }
+        }
+        Text(
+            "Humedad de la tierra de cada sensor. Solo se monitorea: el ESP32 no tiene bomba de riego. " +
+                "El nombre se guarda en este teléfono y aparece también en el Historial.",
+            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant
+        )
+    }
+}
+
+/** Planta que se muestra. [indice]: su sensor (o el que tendrá); [humedad] null = espera su sensor. */
+class PlantaVisible(val indice: Int, val humedad: Float?, val estado: String?)
+
+/** Sensores que no se quitaron, en orden, y después las plantas añadidas que esperan sensor. */
+private fun plantasVisibles(l: LecturaEsp32, quitadas: Set<Int>, esperando: Int): List<PlantaVisible> =
+    l.humedades.indices.filter { it !in quitadas }.map { PlantaVisible(it, l.humedades[it], l.estadosSuelo.getOrNull(it)) } +
+        List(esperando) { k -> PlantaVisible(l.humedades.size + k, null, null) }
+
+/** Panel del botón "+": lista de plantas con su estado, quitar, volver a mostrar y añadir. */
+@Composable
+private fun GestionPlantas(
+    plantas: List<PlantaVisible>,
+    quitadas: Set<Int>,
+    sensores: Int,
+    nombres: List<String>,
+    puedeEditar: Boolean,
+    alAnadir: () -> Unit,
+    alQuitar: (PlantaVisible) -> Unit,
+    alRestaurar: (Int) -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "Cada planta lleva un sensor de humedad de suelo conectado al ESP32. Añade una planta y conecta " +
+                "su sensor: aparecerá sola cuando el ESP32 lo detecte.",
+            style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant
+        )
+        plantas.forEach { pl ->
+            val nombre = nombrePlanta(nombres, pl.indice)
+            val h = pl.humedad
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(nombre, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (h == null) "Esperando sensor" else "Conectada · ${h.roundToInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (h == null) cs.tertiary else cs.onSurfaceVariant
+                    )
+                }
+                if (puedeEditar) {
+                    IconButton(onClick = { alQuitar(pl) }) { Icon(Icons.Filled.Delete, contentDescription = "Quitar $nombre") }
+                }
+            }
+        }
+        val ocultas = quitadas.filter { it < sensores }.sorted()
+        if (ocultas.isNotEmpty()) {
+            Text(
+                "Quitadas (su sensor sigue conectado)",
+                style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp)
+            )
+            ocultas.forEach { i ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(nombrePlanta(nombres, i), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    if (puedeEditar) TextButton(onClick = { alRestaurar(i) }) { Text("Volver a mostrar") }
+                }
+            }
+        }
+        if (puedeEditar) {
+            Button(
+                onClick = alAnadir,
+                enabled = plantas.size < PlantasRepo.MAX_PLANTAS,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Añadir planta")
+            }
+        } else {
+            Text("Las cuentas de invitado no pueden cambiar las plantas.", color = cs.error, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

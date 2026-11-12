@@ -34,6 +34,48 @@ data class RegistroAuditoria(
  */
 class BaseDatos(context: Context) : SQLiteOpenHelper(context, "invernadero.db", null, 3) {
 
+    companion object {
+        /**
+         * Junta el historial de este teléfono con los resúmenes de 5 min que el ESP32 subió a la nube.
+         * Donde hay datos locales (más detallados) se usan esos; la nube rellena los huecos
+         * (p. ej. en otro teléfono, o mientras este estuvo lejos del invernadero).
+         */
+        fun combinar(locales: List<RegistroLectura>, nube: List<RegistroLectura>, margenMs: Long = 5 * 60_000L): List<RegistroLectura> {
+            if (nube.isEmpty()) return locales
+            val tiempos = locales.map { it.ts }.sorted()
+            fun hayLocalCerca(ts: Long): Boolean {
+                var i = tiempos.binarySearch(ts)
+                if (i < 0) i = -i - 1
+                return (i < tiempos.size && tiempos[i] - ts <= margenMs) || (i > 0 && ts - tiempos[i - 1] <= margenMs)
+            }
+            return (locales + nube.filter { !hayLocalCerca(it.ts) }).sortedBy { it.ts }
+        }
+
+        /** Agrupa en a lo más [puntos] tramos (promedio de cada tramo) para dibujar sin cargar miles de puntos. */
+        fun agrupar(todas: List<RegistroLectura>, puntos: Int = 120): List<RegistroLectura> {
+            if (todas.size <= puntos) return todas
+            val tramo = (todas.size + puntos - 1) / puntos
+            return todas.chunked(tramo).map { g ->
+                val sensores = g.maxOf { it.humedades.size }
+                RegistroLectura(
+                    ts = g.last().ts,
+                    temperatura = g.map { it.temperatura }.average().toFloat(),
+                    humedadAire = g.mapNotNull { it.humedadAire }.takeIf { it.isNotEmpty() }?.average()?.toFloat(),
+                    humedadSuelo = g.map { it.humedadSuelo }.average().toFloat(),
+                    pwm = g.map { it.pwm }.average().toInt(),
+                    ventana = g.map { it.ventana }.average().toFloat(),
+                    humedades = List(sensores) { i -> g.mapNotNull { it.humedades.getOrNull(i) }.average().toFloat() }
+                )
+            }
+        }
+    }
+
+    /**
+     * Copia de cada registro de auditoría hacia la nube (la pone la capa Nube al iniciar).
+     * Si no hay sesión en la nube no hace nada; el registro local se guarda igual.
+     */
+    @Volatile var espejo: ((usuario: String, accion: String, detalle: String, resultado: String) -> Unit)? = null
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE usuarios(
@@ -149,8 +191,11 @@ class BaseDatos(context: Context) : SQLiteOpenHelper(context, "invernadero.db", 
      * Lecturas desde [desde] hasta ahora, agrupadas en a lo más [puntos] tramos (promedio de cada tramo)
      * para dibujar la evolución de las plantas sin cargar miles de puntos en la gráfica.
      */
-    fun lecturasDesde(desde: Long, puntos: Int = 120): List<RegistroLectura> {
-        val todas = readableDatabase.rawQuery(
+    fun lecturasDesde(desde: Long, puntos: Int = 120): List<RegistroLectura> = agrupar(lecturasCrudasDesde(desde), puntos)
+
+    /** Todas las lecturas guardadas desde [desde], sin agrupar, de la más vieja a la más nueva. */
+    fun lecturasCrudasDesde(desde: Long): List<RegistroLectura> =
+        readableDatabase.rawQuery(
             "SELECT ts, temperatura, humedad_aire, humedades, pwm, ventana FROM lecturas WHERE ts >= ? ORDER BY ts",
             arrayOf(desde.toString())
         ).use { c ->
@@ -162,21 +207,6 @@ class BaseDatos(context: Context) : SQLiteOpenHelper(context, "invernadero.db", 
                 }
             }
         }
-        if (todas.size <= puntos) return todas
-        val tramo = (todas.size + puntos - 1) / puntos
-        return todas.chunked(tramo).map { g ->
-            val sensores = g.maxOf { it.humedades.size }
-            RegistroLectura(
-                ts = g.last().ts,
-                temperatura = g.map { it.temperatura }.average().toFloat(),
-                humedadAire = g.mapNotNull { it.humedadAire }.takeIf { it.isNotEmpty() }?.average()?.toFloat(),
-                humedadSuelo = g.map { it.humedadSuelo }.average().toFloat(),
-                pwm = g.map { it.pwm }.average().toInt(),
-                ventana = g.map { it.ventana }.average().toFloat(),
-                humedades = List(sensores) { i -> g.mapNotNull { it.humedades.getOrNull(i) }.average().toFloat() }
-            )
-        }
-    }
 
     // ───── Auditoría ─────
     fun auditar(usuario: String, accion: String, detalle: String, resultado: String) {
@@ -188,6 +218,7 @@ class BaseDatos(context: Context) : SQLiteOpenHelper(context, "invernadero.db", 
             put("resultado", resultado)
         }
         writableDatabase.insert("auditoria", null, cv)
+        runCatching { espejo?.invoke(usuario.take(40), accion, detalle.take(200), resultado) }
     }
 
     fun ultimaAuditoria(n: Int): List<RegistroAuditoria> =

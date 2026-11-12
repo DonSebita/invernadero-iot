@@ -1,6 +1,23 @@
 package com.invernadero.ui
 
+import android.app.Activity
+import android.content.res.Configuration
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -39,9 +56,7 @@ import com.invernadero.ui.controles.PantallaControles
 import com.invernadero.ui.ajustes.PantallaAjustes
 import com.invernadero.ui.historial.PantallaHistorial
 import com.invernadero.ui.monitoreo.PantallaMonitoreo
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 
 @Composable
 fun AppInvernadero(c: Contenedor) {
@@ -54,18 +69,28 @@ fun AppInvernadero(c: Contenedor) {
         c.conexion.reiniciar()
         while (true) {
             delay(15_000)
-            // Un invitado sale apenas su pase vence o lo revocan
-            val paseCerrado = u.invitado && !withContext(Dispatchers.IO) { c.invitaciones.vigente(-u.id) }
+            // Un invitado sale apenas su pase vence o lo revocan (se revisa en la nube)
+            val paseCerrado = u.invitado && !c.nube.paseVigente(u)
             if (c.sesion.expirada() || paseCerrado) {
                 val motivo = when {
                     u.invitado && System.currentTimeMillis() > u.vence -> "Fin de la visita: el pase venció"
                     paseCerrado -> "Fin de la visita: el pase fue revocado"
                     else -> "Cierre automático por inactividad"
                 }
-                withContext(Dispatchers.IO) { c.db.auditar(u.nombre, if (u.invitado) "INVITADO" else "SESION", motivo, "OK") }
-                c.conexion.detener()
-                c.sesion.cerrar()
+                c.cerrarSesion(u, if (u.invitado) "INVITADO" else "SESION", motivo)
                 break
+            }
+        }
+    }
+
+    // Íconos de la barra de estado oscuros de día y claros al atardecer (el fondo llega hasta arriba)
+    val vista = LocalView.current
+    if (!vista.isInEditMode) {
+        SideEffect {
+            val ventana = (vista.context as? Activity)?.window ?: return@SideEffect
+            WindowCompat.getInsetsController(ventana, vista).apply {
+                isAppearanceLightStatusBars = !modoTarde
+                isAppearanceLightNavigationBars = !modoTarde
             }
         }
     }
@@ -113,34 +138,67 @@ private fun PantallaConMenu(c: Contenedor, u: Usuario, modoTarde: Boolean, alCam
         Destino("ajustes", if (u.invitado) "Visita" else "Ajustes", Icons.Filled.Settings),
     )
     val actual by nav.currentBackStackEntryAsState()
-
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                destinos.forEach { d ->
-                    NavigationBarItem(
-                        selected = actual?.destination?.route == d.ruta ||
-                            (d.ruta == "historial" && actual?.destination?.route == "registro"),
-                        onClick = {
-                            nav.navigate(d.ruta) {
-                                popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = { Icon(d.icono, contentDescription = d.titulo) },
-                        label = { Text(d.titulo) }
-                    )
-                }
-            }
-        }
-    ) { relleno ->
-        NavHost(nav, startDestination = "monitoreo", modifier = Modifier.padding(relleno)) {
+    fun elegido(d: Destino) = actual?.destination?.route == d.ruta ||
+        (d.ruta == "historial" && actual?.destination?.route == "registro")
+    fun ir(d: Destino) = nav.navigate(d.ruta) {
+        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+    val pantallas: @Composable (Modifier) -> Unit = { modificador ->
+        NavHost(nav, startDestination = "monitoreo", modifier = modificador) {
             composable("monitoreo") { PantallaMonitoreo(c, modoTarde, alCambiarModo) }
             composable("controles") { PantallaControles(c, u) }
             composable("historial") { PantallaHistorial(c) { nav.navigate("registro") } }
             composable("registro") { PantallaRegistro(c) { nav.popBackStack() } }
             composable("ajustes") { PantallaAjustes(c, u) }
+        }
+    }
+
+    // Material: en horizontal (o en pantallas anchas) el menú va en un riel lateral, no abajo,
+    // para no robarle alto al contenido
+    val config = LocalConfiguration.current
+    val usarRiel = config.orientation == Configuration.ORIENTATION_LANDSCAPE || config.screenWidthDp >= 600
+
+    if (usarRiel) {
+        val ladoRiel = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)
+        Row(Modifier.fillMaxSize()) {
+            NavigationRail(windowInsets = ladoRiel) {
+                Spacer(Modifier.weight(1f))
+                destinos.forEach { d ->
+                    NavigationRailItem(
+                        selected = elegido(d),
+                        onClick = { ir(d) },
+                        icon = { Icon(d.icono, contentDescription = d.titulo) },
+                        label = { Text(d.titulo) },
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+            }
+            pantallas(
+                Modifier.weight(1f).fillMaxHeight()
+                    .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))
+            )
+        }
+    } else {
+        // Sin márgenes automáticos arriba: cada pantalla decide (Monitoreo pinta su cielo bajo la barra de estado y la cámara)
+        Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {
+                NavigationBar {
+                    destinos.forEach { d ->
+                        NavigationBarItem(
+                            selected = elegido(d),
+                            onClick = { ir(d) },
+                            icon = { Icon(d.icono, contentDescription = d.titulo) },
+                            label = { Text(d.titulo) }
+                        )
+                    }
+                }
+            }
+        ) { relleno ->
+            pantallas(Modifier.padding(relleno).consumeWindowInsets(relleno))
         }
     }
 }

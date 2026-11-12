@@ -10,7 +10,7 @@ import kotlin.random.Random
 
 /** Imita la lógica de tu sketch para probar la app sin hardware. */
 class SimuladorEsp32(private val sensores: Int) : FuenteEsp32 {
-    override val nombre = "Simulador ($sensores sensores)"
+    override val nombre = "Simulador"   // la cantidad de plantas ya se ve en la hoja de Monitoreo
 
     private val mutex = Mutex()
     private val hum = MutableList(sensores) { 30f + Random.nextFloat() * 45f }
