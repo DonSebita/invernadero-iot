@@ -1,0 +1,263 @@
+@Composable
+private fun CampoCorreo(valor: String, alCambiar: (String) -> Unit, accionFinal: (() -> Unit)? = null) {
+    OutlinedTextField(
+        value = valor,
+        onValueChange = { alCambiar(it.trim().take(80)) },
+        label = { Text("Correo") },
+        leadingIcon = { Icon(Icons.Filled.Email, null) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Email,
+            imeAction = if (accionFinal != null) ImeAction.Done else ImeAction.Next,
+            autoCorrectEnabled = false
+        ),
+        keyboardActions = KeyboardActions(onDone = { accionFinal?.invoke() })
+    )
+}
+
+/** Línea con una "o" al centro, entre el formulario y el botón de Google. */
+@Composable
+private fun SeparadorO() {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        HorizontalDivider(Modifier.weight(1f))
+        Text("o", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp))
+        HorizontalDivider(Modifier.weight(1f))
+    }
+}
+
+private fun resultadoAuditoria(r: Result<*>): String = when {
+    r.isSuccess -> "OK"
+    (r.exceptionOrNull() as? ErrorNube)?.bloqueado == true -> "BLOQUEADO"
+    else -> "FALLIDO"
+}
+
+/** "Continuar con Google": la primera vez crea la cuenta y su invernadero en la nube. */
+@Composable
+private fun BotonGoogle(c: Contenedor, recordar: Boolean, alError: (String?) -> Unit) {
+    val contexto = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var cargando by remember { mutableStateOf(false) }
+    OutlinedButton(
+        onClick = {
+            if (cargando) return@OutlinedButton
+            cargando = true
+            alError(null)
+            scope.launch {
+                val r = runCatching { c.nube.entrarConGoogle(tokenDeGoogle(contexto), recordar) }
+                cargando = false
+                if (r.exceptionOrNull() is GoogleCancelado) return@launch
+                withContext(Dispatchers.IO) {
+                    c.db.auditar(r.getOrNull()?.nombre ?: "Google", "LOGIN",
+                        "Inicio de sesión con Google" + if (recordar) " (recordado en este teléfono)" else "", resultadoAuditoria(r))
+                }
+                r.onSuccess { c.sesion.iniciar(it, recordar) }
+                    .onFailure { alError(it.message ?: "No se pudo entrar con Google") }
+            }
+        },
+        enabled = !cargando,
+        modifier = Modifier.fillMaxWidth().height(52.dp)
+    ) {
+        if (cargando) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+        else Text("Continuar con Google", style = MaterialTheme.typography.titleSmall)
+    }
+}
+
+// ───────────────────────── Entrar ─────────────────────────
+
+@Composable
+private fun FormEntrar(
+    c: Contenedor,
+    correo: String,
+    alCambiarCorreo: (String) -> Unit,
+    aviso: String?,
+    alOlvidar: () -> Unit
+) {
+    var clave by remember { mutableStateOf("") }          // la contraseña no se guarda en el estado persistente
+    var recordar by rememberSaveable { mutableStateOf(false) }
+    var cargando by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun ingresar() {
+        if (cargando) return
+        val limpio = correo.trim()
+        if (!Nube.correoValido(limpio) || clave.isEmpty()) { error = "Escribe tu correo y tu contraseña"; return }
+        cargando = true
+        error = null
+        val recordarAhora = recordar
+        val claveAhora = clave
+        scope.launch {
+            val r = runCatching { c.nube.entrarConCorreo(limpio, claveAhora, recordarAhora) }
+            withContext(Dispatchers.IO) {
+                c.db.auditar(r.getOrNull()?.nombre ?: limpio, "LOGIN",
+                    "Inicio de sesión con correo" + if (recordarAhora) " (recordado en este teléfono)" else "", resultadoAuditoria(r))
+            }
+            cargando = false
+            r.onSuccess { clave = ""; c.sesion.iniciar(it, recordarAhora) }
+                .onFailure { error = it.message ?: "No se pudo entrar" }
+        }
+    }
+
+    Titulo("Qué bueno verte de nuevo", "Tus plantas siguieron creciendo mientras no estabas.")
+    Mensaje(aviso, error = false)
+    CampoCorreo(correo, alCambiarCorreo)
+    CampoClave(clave, "Contraseña", { clave = it.take(64) }) { ingresar() }
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        TextButton(onClick = alOlvidar) { Text("¿Olvidaste tu contraseña?") }
+    }
+    Recordarme(recordar) { recordar = it }
+    Mensaje(error)
+    BotonPrincipal("Entrar al invernadero", cargando) { ingresar() }
+    SeparadorO()
+    BotonGoogle(c, recordar) { error = it }
+    NotaPie(
+        "Tu cuenta vive en la nube (Firebase): entra con ella en cualquier teléfono y verás el mismo invernadero. " +
+            "Tras ${Nube.MAX_PASES} intentos fallidos la puerta descansa 5 minutos, y sin «Recordarme» la sesión se cierra sola tras 10 minutos quieta."
+    )
+}
+
+// ───────────────────────── Crear cuenta ─────────────────────────
+
+@Composable
+private fun FormCrear(c: Contenedor) {
+    var nombre by rememberSaveable { mutableStateOf("") }
+    var correo by rememberSaveable { mutableStateOf("") }
+    var clave by remember { mutableStateOf("") }
+    var confirmar by remember { mutableStateOf("") }
+    var recordar by rememberSaveable { mutableStateOf(false) }
+    var cargando by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun crear() {
+        if (cargando) return
+        val n = normalizarNombre(nombre)
+        val limpio = correo.trim()
+        error = when {
+            !Nube.correoValido(limpio) -> "Escribe un correo válido: ahí te llegará el enlace si olvidas la contraseña"
+            else -> Contrasenas.validarPolitica(n, clave) ?: if (clave != confirmar) "Las contraseñas no coinciden" else null
+        }
+        if (error != null) return
+        cargando = true
+        val claveAhora = clave
+        val recordarAhora = recordar
+        scope.launch {
+            val r = runCatching { c.nube.crearCuenta(n, limpio, claveAhora, recordarAhora) }
+            withContext(Dispatchers.IO) {
+                c.db.auditar(n, "USUARIO", "Cuenta creada con correo (y su invernadero en la nube)", if (r.isSuccess) "OK" else "FALLIDO")
+            }
+            cargando = false
+            r.onSuccess { clave = ""; confirmar = ""; c.sesion.iniciar(it, recordarAhora) }
+                .onFailure { error = it.message ?: "No se pudo crear la cuenta" }
+        }
+    }
+
+    Titulo("Siembra tu cuenta", "Un brote nuevo: podrás ver cómo crecen tus plantas y regarlas o ventilarlas desde cualquier teléfono.")
+    CampoNombre(nombre, "Tu nombre", { nombre = it.take(30) }, ayuda = "Así te verán en el registro y en los pases que compartas. De 3 a 30 caracteres")
+    CampoCorreo(correo, { correo = it })
+    CampoClave(clave, "Contraseña", { clave = it.take(64) }, ayuda = "Mínimo 8 caracteres, con letras y números")
+    CampoClave(confirmar, "Repite la contraseña", { confirmar = it.take(64) }) { crear() }
+    Recordarme(recordar) { recordar = it }
+    Mensaje(error)
+    BotonPrincipal("Crear mi cuenta", cargando) { crear() }
+    SeparadorO()
+    BotonGoogle(c, recordar) { error = it }
+    NotaPie("Te enviaremos un correo para confirmar tu dirección. Si olvidas la contraseña, te llegará ahí un enlace para crear otra.")
+}
+
+// ───────────────────────── Pase de visita ─────────────────────────
+
+@Composable
+private fun FormInvitado(c: Contenedor) {
+    var nombre by rememberSaveable { mutableStateOf("") }
+    var codigo by remember { mutableStateOf(TextFieldValue("")) }
+    var cargando by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun entrar() {
+        if (cargando) return
+        val visitante = normalizarNombre(nombre)
+        error = Nube.validarVisitante(visitante)
+            ?: if (Nube.normalizarPase(codigo.text).length != Nube.LARGO_PASE) "La clave temporal tiene 12 caracteres, como 7KQ4-M2PX-9WRT" else null
+        if (error != null) return
+        cargando = true
+        val clave = codigo.text
+        scope.launch {
+            val r = runCatching { c.nube.entrarDeVisita(visitante, clave) }
+            withContext(Dispatchers.IO) {
+                c.db.auditar("$visitante (invitado)", "INVITADO",
+                    r.getOrNull()?.let { "Entrada con pase de ${it.anfitrion}" } ?: "Intento de entrada con pase", resultadoAuditoria(r))
+            }
+            cargando = false
+            r.onSuccess { codigo = TextFieldValue(""); c.sesion.iniciar(it) }
+                .onFailure { error = it.message ?: "No se pudo abrir la visita" }
+        }
+    }
+
+    Titulo("Pase de visita", "Alguien te abrió la puerta de su invernadero. Escribe la clave temporal que te compartió.")
+    CampoNombre(nombre, "Tu nombre", { nombre = it.take(24) }, ayuda = "Así sabrá tu anfitrión quién pasó a regar")
+    OutlinedTextField(
+        value = codigo,
+        onValueChange = { nuevo -> val f = Nube.formatearPase(nuevo.text); codigo = TextFieldValue(f, TextRange(f.length)) },
+        label = { Text("Clave temporal") },
+        placeholder = { Text("XXXX-XXXX-XXXX") },
+        leadingIcon = { Icon(Icons.Filled.Lock, null) },
+        textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace, letterSpacing = 2.sp),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Characters,
+            keyboardType = KeyboardType.Ascii,
+            imeAction = ImeAction.Done,
+            autoCorrectEnabled = false
+        ),
+        keyboardActions = KeyboardActions(onDone = { entrar() })
+    )
+    Mensaje(error)
+    BotonPrincipal("Entrar de visita", cargando) { entrar() }
+    NotaPie("Necesitas Internet para entrar. El pase dura lo que tu anfitrión decidió, de 1 hora a 3 días; al vencer, la visita termina sola. No podrás cambiar ajustes ni invitar a otros.")
+}
+
+// ───────────────────────── Olvidé mi contraseña ─────────────────────────
+
+@Composable
+private fun FormRecuperar(
+    c: Contenedor,
+    correo: String,
+    alCambiarCorreo: (String) -> Unit,
+    alVolver: () -> Unit,
+    alEnviar: (String) -> Unit
+) {
+    var cargando by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    fun enviar() {
+        if (cargando) return
+        val limpio = correo.trim()
+        if (!Nube.correoValido(limpio)) { error = "Escribe el correo de tu cuenta"; return }
+        cargando = true
+        error = null
+        scope.launch {
+            val r = runCatching { c.nube.recuperar(limpio) }
+            withContext(Dispatchers.IO) { c.db.auditar(limpio, "RECUPERAR", "Enlace para nueva contraseña", if (r.isSuccess) "OK" else "FALLIDO") }
+            cargando = false
+            r.onSuccess { alEnviar("Si ese correo tiene una cuenta, te llegó un enlace para crear una contraseña nueva. Revisa también la carpeta de spam.") }
+                .onFailure { error = it.message ?: "No se pudo enviar el enlace" }
+        }
+    }
+
+    TextButton(onClick = alVolver, modifier = Modifier.padding(top = 8.dp)) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("Volver a entrar")
+    }
+    Titulo("Recupera tu acceso", "Te enviaremos un enlace a tu correo para que hagas brotar una contraseña nueva.")
+    CampoCorreo(correo, alCambiarCorreo) { enviar() }
+    Mensaje(error)
+    BotonPrincipal("Enviar enlace", cargando) { enviar() }
+    NotaPie("Si entraste con Google, tu contraseña es la de tu cuenta de Google: recupérala desde Google.")
+}

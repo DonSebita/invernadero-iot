@@ -1,0 +1,46 @@
+// ───────────────────────── Navegación entre formularios ─────────────────────────
+
+@Composable
+private fun Acceso(c: Contenedor) {
+    var vista by rememberSaveable { mutableStateOf(Vista.ENTRAR) }
+    var correo by rememberSaveable { mutableStateOf("") }
+    var avisoEntrar by remember { mutableStateOf<String?>(null) }
+
+    BackHandler(enabled = vista == Vista.RECUPERAR) { vista = Vista.ENTRAR }
+
+    if (vista != Vista.RECUPERAR) {
+        PrimaryTabRow(
+            selectedTabIndex = Pestanas.indexOf(vista),
+            containerColor = Color.Transparent,
+            modifier = Modifier.padding(bottom = 8.dp)
+        ) {
+            Pestanas.forEach { v ->
+                Tab(
+                    selected = vista == v,
+                    onClick = { vista = v; avisoEntrar = null },
+                    text = { Text(v.pestana, maxLines = 1) },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                )
+            }
+        }
+    }
+
+    AnimatedContent(
+        targetState = vista,
+        transitionSpec = { fadeIn(tween(240, delayMillis = 60)) togetherWith fadeOut(tween(120)) },
+        label = "vista"
+    ) { v ->
+        Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            when (v) {
+                Vista.ENTRAR -> FormEntrar(c, correo, { correo = it }, avisoEntrar) { vista = Vista.RECUPERAR }
+                Vista.CREAR -> FormCrear(c)
+                Vista.INVITADO -> FormInvitado(c)
+                Vista.RECUPERAR -> FormRecuperar(c, correo, { correo = it }, alVolver = { vista = Vista.ENTRAR }) { aviso ->
+                    avisoEntrar = aviso
+                    vista = Vista.ENTRAR
+                }
+            }
+        }
+    }
+}
+

@@ -1,0 +1,257 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "usuarios": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid && auth.provider !== 'anonymous'",
+        ".validate": "newData.hasChildren(['nombre', 'invernadero'])",
+        "nombre": {
+          ".validate": "newData.isString() && newData.val().length >= 2 && newData.val().length <= 30"
+        },
+        "invernadero": {
+          ".validate": "newData.isString() && root.child('invernaderos/' + newData.val() + '/dueno').val() === auth.uid"
+        },
+        "$otro": {
+          ".validate": false
+        }
+      }
+    },
+    "pasesIndice": {
+      "$hash": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.provider !== 'anonymous' && ((!data.exists() && newData.isString() && root.child('invernaderos/' + newData.val() + '/dueno').val() === auth.uid) || (data.exists() && root.child('invernaderos/' + data.val() + '/dueno').val() === auth.uid))",
+        ".validate": "newData.isString() && $hash.matches(/^[0-9a-f]{64}$/)"
+      }
+    },
+    "invernaderos": {
+      "$inv": {
+        ".read": "auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid",
+        ".write": "auth != null && auth.provider !== 'anonymous' && !data.exists() && newData.child('dueno').val() === auth.uid",
+        ".validate": "newData.hasChildren(['dueno'])",
+        "dueno": {
+          ".validate": "newData.isString()"
+        },
+        "creado": {
+          ".validate": "newData.isNumber()"
+        },
+        "nombre": {
+          ".read": "auth != null && root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').isString() && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/vence').val() > now && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/revocado').val() !== true",
+          ".write": "auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid",
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 60"
+        },
+        "dispositivo": {
+          ".write": "auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid",
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 128"
+        },
+        "estado": {
+          ".read": "auth != null && root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').isString() && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/vence').val() > now && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/revocado').val() !== true",
+          ".write": "auth != null && root.child('invernaderos/' + $inv + '/dispositivo').val() === auth.uid",
+          ".validate": "newData.hasChildren(['ts'])",
+          "ts": {
+            ".validate": "newData.isNumber() && newData.val() <= now + 600000 && newData.val() > now - 604800000"
+          },
+          "temperatura": {
+            ".validate": "newData.isNumber() && newData.val() >= -40 && newData.val() <= 85"
+          },
+          "humedadAire": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "humedades": {
+            "$i": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            }
+          },
+          "estadosSuelo": {
+            "$i": {
+              ".validate": "newData.isString() && newData.val().length >= 0 && newData.val().length <= 30"
+            }
+          },
+          "pwm": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 255"
+          },
+          "ventana": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 90"
+          },
+          "modoVentilador": {
+            ".validate": "newData.val() === 'AUTO' || newData.val() === 'MANUAL'"
+          },
+          "modoVentana": {
+            ".validate": "newData.val() === 'AUTO' || newData.val() === 'MANUAL'"
+          },
+          "parametros": {
+            "ventiladorSobre": {
+              ".validate": "newData.isNumber() && newData.val() >= 15 && newData.val() <= 40"
+            },
+            "ventanaDesde": {
+              ".validate": "newData.isNumber() && newData.val() >= 5 && newData.val() <= 40"
+            },
+            "ventanaHasta": {
+              ".validate": "newData.isNumber() && newData.val() >= 10 && newData.val() <= 45"
+            },
+            "humedadMaxima": {
+              ".validate": "newData.isNumber() && newData.val() >= 40 && newData.val() <= 100"
+            },
+            "$otro": {
+              ".validate": false
+            }
+          },
+          "$otro": {
+            ".validate": false
+          }
+        },
+        "resumenes": {
+          ".read": "auth != null && root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').isString() && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/vence').val() > now && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/revocado').val() !== true",
+          ".indexOn": [
+            "ts"
+          ],
+          "$id": {
+            ".write": "(!data.exists() && auth != null && root.child('invernaderos/' + $inv + '/dispositivo').val() === auth.uid) || (!newData.exists() && auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['ts', 'n'])",
+            "ts": {
+              ".validate": "newData.isNumber() && newData.val() <= now + 600000 && newData.val() > now - 604800000"
+            },
+            "n": {
+              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 10000"
+            },
+            "tProm": {
+              ".validate": "newData.isNumber() && newData.val() >= -40 && newData.val() <= 85"
+            },
+            "tMin": {
+              ".validate": "newData.isNumber() && newData.val() >= -40 && newData.val() <= 85"
+            },
+            "tMax": {
+              ".validate": "newData.isNumber() && newData.val() >= -40 && newData.val() <= 85"
+            },
+            "haProm": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "hsProm": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "humedades": {
+              "$i": {
+                ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+              }
+            },
+            "pwmProm": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 255"
+            },
+            "ventanaProm": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 90"
+            },
+            "ventiladorSeg": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 86400"
+            },
+            "$otro": {
+              ".validate": false
+            }
+          }
+        },
+        "alertas": {
+          ".read": "auth != null && root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').isString() && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/vence').val() > now && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/revocado').val() !== true",
+          ".indexOn": [
+            "ts"
+          ],
+          "$id": {
+            ".write": "(!data.exists() && auth != null && root.child('invernaderos/' + $inv + '/dispositivo').val() === auth.uid) || (!newData.exists() && auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['ts', 'tipo', 'detalle'])",
+            "ts": {
+              ".validate": "newData.isNumber() && newData.val() <= now + 600000 && newData.val() > now - 604800000"
+            },
+            "tipo": {
+              ".validate": "newData.isString() && newData.val().matches(/^[A-Z]{3,12}$/)"
+            },
+            "detalle": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 120"
+            },
+            "$otro": {
+              ".validate": false
+            }
+          }
+        },
+        "pases": {
+          "$h": {
+            ".read": "auth != null",
+            ".write": "auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid",
+            ".validate": "newData.hasChildren(['creador', 'creadorNombre', 'puedeActivar', 'creada', 'vence']) && $h.matches(/^[0-9a-f]{64}$/)",
+            "creador": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "creadorNombre": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 40"
+            },
+            "puedeActivar": {
+              ".validate": "newData.isBoolean()"
+            },
+            "creada": {
+              ".validate": "newData.isNumber()"
+            },
+            "vence": {
+              ".validate": "newData.isNumber() && newData.val() <= now + 259200000 + 600000"
+            },
+            "revocado": {
+              ".validate": "newData.isBoolean()"
+            },
+            "$otro": {
+              ".validate": false
+            }
+          }
+        },
+        "visitas": {
+          "$uid": {
+            ".read": "auth != null && auth.uid === $uid",
+            ".write": "(auth != null && auth.uid === $uid && !data.exists()) || (!newData.exists() && auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid)",
+            ".validate": "newData.hasChildren(['pase', 'nombre', 'ts']) && root.child('invernaderos/' + $inv + '/pases/' + newData.child('pase').val() + '/vence').val() > now && root.child('invernaderos/' + $inv + '/pases/' + newData.child('pase').val() + '/revocado').val() !== true",
+            "pase": {
+              ".validate": "newData.isString() && newData.val().matches(/^[0-9a-f]{64}$/)"
+            },
+            "nombre": {
+              ".validate": "newData.isString() && newData.val().length >= 2 && newData.val().length <= 40"
+            },
+            "ts": {
+              ".validate": "newData.val() === now"
+            },
+            "$otro": {
+              ".validate": false
+            }
+          }
+        },
+        "auditoria": {
+          ".indexOn": [
+            "ts"
+          ],
+          "$id": {
+            ".write": "!data.exists() && (auth != null && root.child('invernaderos/' + $inv + '/dueno').val() === auth.uid || auth != null && root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').isString() && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/vence').val() > now && root.child('invernaderos/' + $inv + '/pases/' + root.child('invernaderos/' + $inv + '/visitas/' + auth.uid + '/pase').val() + '/revocado').val() !== true)",
+            ".validate": "newData.hasChildren(['ts', 'uid', 'usuario', 'accion', 'resultado'])",
+            "ts": {
+              ".validate": "newData.val() === now"
+            },
+            "uid": {
+              ".validate": "newData.val() === auth.uid"
+            },
+            "usuario": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 60"
+            },
+            "accion": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 20"
+            },
+            "detalle": {
+              ".validate": "newData.isString() && newData.val().length >= 0 && newData.val().length <= 200"
+            },
+            "resultado": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 60"
+            },
+            "$otro": {
+              ".validate": false
+            }
+          }
+        },
+        "$otro": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}
