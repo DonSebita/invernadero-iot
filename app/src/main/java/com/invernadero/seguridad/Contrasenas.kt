@@ -31,8 +31,8 @@ object Contrasenas {
 
     /** Política de credenciales. Devuelve el problema o null si está bien. */
     fun validarPolitica(usuario: String, clave: String): String? = when {
-        usuario.length !in 3..30 || !usuario.matches(Regex("[A-Za-z0-9._-]+")) ->
-            "El usuario debe tener de 3 a 30 caracteres (letras, números, punto, guion)"
+        usuario.length !in 3..30 || !usuario.matches(Regex("[\\p{L}0-9._ -]+")) || usuario != usuario.trim() ->
+            "El nombre debe tener de 3 a 30 caracteres: letras, números, espacios, punto o guion"
         clave.length < 8 -> "La contraseña debe tener al menos 8 caracteres"
         !clave.any { it.isLetter() } || !clave.any { it.isDigit() } -> "La contraseña debe combinar letras y números"
         clave.contains(usuario, ignoreCase = true) -> "La contraseña no puede contener el nombre de usuario"

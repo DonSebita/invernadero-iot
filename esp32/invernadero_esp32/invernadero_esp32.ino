@@ -5,6 +5,12 @@
  *   - Ciclo automático cada 30 s (ventilador por temperatura + "respiración" cada 5 min, ventana por temperatura)
  *   - Ventana: 120° = cerrada, 0° = abierta, movimiento suave
  *   - Comandos: A/C ventana, + - M 0 ventilador, X automático   (+ V<0-255> y W<0-90> para los sliders de la app)
+ *   - Reglas del modo automático, ajustables desde la app (pantalla Controles) y guardadas en la memoria
+ *     del ESP32 (sobreviven a un reinicio):
+ *       T<15-40>  el ventilador se enciende sobre T °C (a toda potencia en T+10 °C)
+ *       L<5-40>   bajo L °C la ventana queda cerrada
+ *       H<10-45>  sobre H °C la ventana queda abierta del todo (entre L y H abre en proporción; H >= L+2)
+ *       U<40-100> si la humedad del aire supera U % se ventila aunque no haga calor (U100 = desactivado)
  *
  * Comunicación con la app:
  *   WiFi:      GET /datos                     -> JSON + cabecera X-Firma = HMAC-SHA256(SECRETO, json)
@@ -30,6 +36,7 @@
 #include "DHT.h"
 #include "mbedtls/md.h"
 #include "esp_random.h"
+#include <Preferences.h>
 
 // ───────── CONFIGURA ESTO ─────────
 const char* WIFI_SSID     = "TU_WIFI";
@@ -76,6 +83,29 @@ const int CICLOS_PARA_RESPIRAR = 10;   // 10 x 30 s = 5 min
 bool ventilandoPorTiempo = false;
 bool fanEstabaApagado = true;
 int  pwmFanActual = 0;
+
+// --- Reglas del modo automático (las ajusta la app; se guardan en NVS) ---
+Preferences preferencias;
+int pVentiladorSobre = 25;   // °C
+int pVentanaDesde    = 20;   // °C
+int pVentanaHasta    = 27;   // °C
+int pHumedadMaxima   = 85;   // %  (100 = no ventilar por humedad)
+
+void cargarReglas() {
+  preferencias.begin("reglas", true);
+  pVentiladorSobre = preferencias.getInt("ventSobre", 25);
+  pVentanaDesde    = preferencias.getInt("ventDesde", 20);
+  pVentanaHasta    = preferencias.getInt("ventHasta", 27);
+  pHumedadMaxima   = preferencias.getInt("humMax", 85);
+  preferencias.end();
+  if (pVentanaHasta < pVentanaDesde + 2) { pVentanaDesde = 20; pVentanaHasta = 27; }
+}
+
+void guardarRegla(const char* clave, int valor) {
+  preferencias.begin("reglas", false);
+  preferencias.putInt(clave, valor);
+  preferencias.end();
+}
 
 // --- Manual ---
 bool modoManualServo = false;
@@ -233,7 +263,7 @@ bool soloDigitos(const String& s) {
   return true;
 }
 
-/** Lista blanca: A C M + - 0 X, V0..V255, W0..W90. Devuelve false si no es válido. */
+/** Lista blanca: A C M + - 0 X, V0..V255, W0..W90 y reglas T/L/H/U con sus rangos. Devuelve false si no es válido. */
 bool procesarTexto(String c) {
   c.trim();
   c.toUpperCase();
@@ -247,6 +277,26 @@ bool procesarTexto(String c) {
       setFan(n);
       fanEstabaApagado = (n == 0);
       mensaje("MODO MANUAL FAN: PWM -> " + String(n));
+      return true;
+    }
+    if (c[0] == 'T' && n >= 15 && n <= 40) {
+      pVentiladorSobre = n; guardarRegla("ventSobre", n);
+      mensaje("REGLA: ventilador sobre " + String(n) + " °C");
+      return true;
+    }
+    if (c[0] == 'L' && n >= 5 && n <= 40 && n <= pVentanaHasta - 2) {
+      pVentanaDesde = n; guardarRegla("ventDesde", n);
+      mensaje("REGLA: ventana empieza a abrir en " + String(n) + " °C");
+      return true;
+    }
+    if (c[0] == 'H' && n >= 10 && n <= 45 && n >= pVentanaDesde + 2) {
+      pVentanaHasta = n; guardarRegla("ventHasta", n);
+      mensaje("REGLA: ventana abierta del todo en " + String(n) + " °C");
+      return true;
+    }
+    if (c[0] == 'U' && n >= 40 && n <= 100) {
+      pHumedadMaxima = n; guardarRegla("humMax", n);
+      mensaje("REGLA: humedad del aire máxima " + String(n) + " %");
       return true;
     }
     if (c[0] == 'W' && n <= 90) {
@@ -273,11 +323,17 @@ void cicloAutomatico() {
   if (isnan(temperatura)) {
     mensaje("¡Error al leer el sensor DHT22 en el pin 4!");
   } else {
+    bool muyHumedo = pHumedadMaxima < 100 && !isnan(humedadAmbiente) && humedadAmbiente > pHumedadMaxima;
     if (!modoManualFan) {
-      if (temperatura > 25.0) {
-        int velocidadVentilador = constrain(map((int)temperatura, 25, 35, 200, 255), 200, 255);
+      if (temperatura > pVentiladorSobre) {
+        int velocidadVentilador = constrain(map((int)temperatura, pVentiladorSobre, pVentiladorSobre + 10, 200, 255), 200, 255);
         if (fanEstabaApagado) { setFan(255); delay(100); fanEstabaApagado = false; }
         setFan(velocidadVentilador);
+        ventilandoPorTiempo = false;
+        contadorCiclos = 0;
+      } else if (muyHumedo) {            // regla de humedad: ventila suave aunque no haga calor
+        if (fanEstabaApagado) { setFan(255); delay(100); fanEstabaApagado = false; }
+        setFan(200);
         ventilandoPorTiempo = false;
         contadorCiclos = 0;
       } else {
@@ -293,9 +349,10 @@ void cicloAutomatico() {
     }
     if (!modoManualServo) {
       int destino;
-      if (temperatura > 27.0)      destino = ANGULO_ABIERTA;
-      else if (temperatura < 20.0) destino = ANGULO_CERRADA;
-      else                         destino = map((int)temperatura, 20, 27, 120, 0);
+      if (temperatura > pVentanaHasta)      destino = ANGULO_ABIERTA;
+      else if (temperatura < pVentanaDesde) destino = ANGULO_CERRADA;
+      else                                  destino = map((int)temperatura, pVentanaDesde, pVentanaHasta, ANGULO_CERRADA, ANGULO_ABIERTA);
+      if (muyHumedo) destino = min(destino, (ANGULO_CERRADA + ANGULO_ABIERTA) / 2);   // al menos a medio abrir
       if (anguloObjetivo != destino) { mensaje("Auto: Ajustando ventana a " + String(destino) + "°"); moverVentana(destino); }
     }
     mensaje("Temp: " + String(temperatura) + " °C | Hum: " + String(humedadAmbiente) +
@@ -311,12 +368,14 @@ String jsonDatos() {
   j += "\"humedades\":[" + String(sueloPorcentaje(humedadSueloAnalog), 1) + "]";
   j += ",\"estadosSuelo\":[\"" + estadoSuelo(humedadSueloAnalog) + "\"]";
   j += ",\"temperatura\":" + String(isnan(temperatura) ? 0.0f : temperatura, 1);
-  j += ",\"humedadAmbiente\":" + String(isnan(humedadAmbiente) ? 0.0f : humedadAmbiente, 1);
+  if (!isnan(humedadAmbiente)) j += ",\"humedadAmbiente\":" + String(humedadAmbiente, 1);   // sin sensor: no se envía
   j += ",\"ventilador\":" + String(pwmFanActual > 0 ? "true" : "false");
   j += ",\"velocidadVentilador\":" + String(pwmFanActual);
   j += ",\"anguloVentana\":" + String(aperturaApp);
   j += ",\"modoVentilador\":\"" + String(modoManualFan ? "MANUAL" : "AUTO") + "\"";
   j += ",\"modoVentana\":\"" + String(modoManualServo ? "MANUAL" : "AUTO") + "\"";
+  j += ",\"parametros\":{\"ventiladorSobre\":" + String(pVentiladorSobre) + ",\"ventanaDesde\":" + String(pVentanaDesde) +
+       ",\"ventanaHasta\":" + String(pVentanaHasta) + ",\"humedadMaxima\":" + String(pHumedadMaxima) + "}";
   j += ",\"nonce\":\"" + nonce + "\"";
   j += "}";
   return j;
@@ -377,6 +436,7 @@ void leerBT() {
 // ───────── Arranque ─────────
 void setup() {
   Serial.begin(115200);
+  cargarReglas();
   nuevoNonce();
   SerialBT.begin(NOMBRE_BT);
 

@@ -39,6 +39,8 @@ class CajaFuerte(context: Context) {
         prefs.edit().putString(nombre, Base64.encodeToString(datos, Base64.NO_WRAP)).apply()
     }
 
+    fun borrar(nombre: String) { prefs.edit().remove(nombre).apply() }
+
     fun leer(nombre: String): String? {
         val b64 = prefs.getString(nombre, null) ?: return null
         return try {

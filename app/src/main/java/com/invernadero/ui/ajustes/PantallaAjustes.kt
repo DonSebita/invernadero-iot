@@ -28,7 +28,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +47,6 @@ import com.invernadero.conexion.buscarCentral
 import com.invernadero.conexion.esIpValida
 import com.invernadero.conexion.ipLocal
 import com.invernadero.datos.ModoConexion
-import com.invernadero.datos.Rol
 import com.invernadero.datos.Usuario
 import com.invernadero.ui.OpcionRadio
 import com.invernadero.ui.Seccion
@@ -59,7 +57,7 @@ import kotlin.math.roundToInt
 
 @Composable
 fun PantallaAjustes(c: Contenedor, u: Usuario) {
-    val admin = u.rol.puedeAdministrar
+    val admin = !u.invitado          // cualquier cuenta configura la conexión; los invitados no
     val contexto = LocalContext.current
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
@@ -107,18 +105,35 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
             Text("Ajustes", style = MaterialTheme.typography.headlineSmall)
 
             Seccion("Sesión") {
-                Text("${u.nombre} · ${u.rol.etiqueta}")
+                if (u.invitado) {
+                    Text("${u.nombre} · de visita por invitación de ${u.anfitrion}")
+                    Text(
+                        "Tu pase vence el ${horaYDia(u.vence)} (${tiempoRestante(u.vence)}). " +
+                            if (u.rol.puedeActivar) "Puedes regar y ventilar." else "Puedes mirar, sin activar nada.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(u.nombre)
+                    Text(
+                        "ID de cuenta ${u.idVisible}" + if (c.sesion.recordada) " · recordada en este teléfono" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 OutlinedButton(onClick = {
                     scope.launch {
-                        withContext(Dispatchers.IO) { c.db.auditar(u.nombre, "SESION", "Cierre de sesión", "OK") }
+                        withContext(Dispatchers.IO) {
+                            c.recordar.olvidar(u)          // cerrar sesión también olvida el "Recordarme"
+                            c.db.auditar(u.nombre, if (u.invitado) "INVITADO" else "SESION", if (u.invitado) "Fin de la visita" else "Cierre de sesión", "OK")
+                        }
                         c.conexion.detener()
                         c.sesion.cerrar()
                     }
-                }) { Text("Cerrar sesión") }
+                }) { Text(if (u.invitado) "Terminar visita" else "Cerrar sesión") }
             }
 
-            Seccion("Conexión inalámbrica") {
-                if (!admin) Text("Solo un administrador puede cambiar estos ajustes.", color = MaterialTheme.colorScheme.error)
+            if (!u.invitado) Seccion("Conexión inalámbrica") {
                 Text("Estado: ${estado.descripcion} — ${if (estado.conectado) "conectado" else estado.mensaje ?: "sin conexión"}",
                     style = MaterialTheme.typography.bodySmall)
 
@@ -199,73 +214,10 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                 }
             }
 
-            if (admin) GestionUsuarios(c, u) { aviso(it) }
-        }
-    }
-}
-
-@Composable
-private fun GestionUsuarios(c: Contenedor, yo: Usuario, aviso: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var usuarios by remember { mutableStateOf<List<Usuario>>(emptyList()) }
-    var recargar by remember { mutableStateOf(0) }
-    var nombre by remember { mutableStateOf("") }
-    var clave by remember { mutableStateOf("") }
-    var rol by remember { mutableStateOf(Rol.OPERADOR) }
-    var guardando by remember { mutableStateOf(false) }
-
-    LaunchedEffect(recargar) { usuarios = withContext(Dispatchers.IO) { c.usuarios.listar() } }
-
-    Seccion("Usuarios (control de acceso)") {
-        usuarios.forEach { usr ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(usr.nombre + if (usr.id == yo.id) " (tú)" else "")
-                    Text(usr.rol.etiqueta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
-                }
-                if (usr.id != yo.id) {
-                    TextButton(onClick = {
-                        scope.launch {
-                            val e = withContext(Dispatchers.IO) {
-                                c.usuarios.eliminar(usr.id).also {
-                                    c.db.auditar(yo.nombre, "USUARIO", "Eliminar ${usr.nombre}", if (it == null) "OK" else "FALLA")
-                                }
-                            }
-                            aviso(e ?: "Usuario eliminado")
-                            recargar++
-                        }
-                    }) { Text("Eliminar") }
-                }
+            if (!u.invitado) {
+                SeccionInvitar(c, u) { aviso(it) }
+                SeccionSemilla(c, u)
             }
         }
-        HorizontalDivider()
-        Text("Nuevo usuario", style = MaterialTheme.typography.titleSmall)
-        OutlinedTextField(nombre, { nombre = it.take(30) }, label = { Text("Usuario") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(
-            clave, { clave = it.take(64) }, label = { Text("Contraseña (mín. 8, letras y números)") }, singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Column(Modifier.selectableGroup()) {
-            Rol.entries.forEach { r -> OpcionRadio(r.etiqueta, rol == r) { rol = r } }
-        }
-        Button(
-            onClick = {
-                guardando = true
-                val n = nombre.trim()
-                val arreglo = clave.toCharArray()
-                val r = rol
-                scope.launch {
-                    val e = withContext(Dispatchers.Default) { c.usuarios.registrar(n, arreglo, r) }
-                    arreglo.fill('\u0000')
-                    withContext(Dispatchers.IO) { c.db.auditar(yo.nombre, "USUARIO", "Crear $n (${r.name})", if (e == null) "OK" else "FALLA") }
-                    guardando = false
-                    if (e == null) { nombre = ""; clave = ""; recargar++; aviso("Usuario creado") } else aviso(e)
-                }
-            },
-            enabled = !guardando && nombre.isNotBlank() && clave.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Crear usuario") }
     }
 }

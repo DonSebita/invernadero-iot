@@ -158,13 +158,16 @@ class ControladorConexion(
     /** Comando desde ESTE teléfono (usuario de la sesión actual). */
     suspend fun enviar(codigo: String): Boolean {
         val u = sesion.usuario.value ?: return false
-        return ejecutar(codigo.trim().uppercase(), u.nombre, u.rol, "este teléfono")
+        return ejecutar(codigo.trim().uppercase(), u.nombre, u.rol, "este teléfono", reglasPermitidas = !u.invitado)
     }
 
-    private suspend fun ejecutar(codigo: String, usuario: String, rol: Rol, origen: String): Boolean {
+    private suspend fun ejecutar(
+        codigo: String, usuario: String, rol: Rol, origen: String, reglasPermitidas: Boolean = true
+    ): Boolean {
         val f = fuente
         val resultado = when {
             !rol.puedeActivar -> "DENEGADO (rol ${rol.etiqueta})"
+            Comandos.esRegla(codigo) && !reglasPermitidas -> "DENEGADO (un pase de visita no cambia las reglas)"
             !Comandos.esValido(codigo) -> "DENEGADO (comando inválido)"
             f == null -> "FALLA (sin conexión)"
             withTimeoutOrNull(8000) { f?.enviar(codigo, usuario, rol) } == true -> "OK"

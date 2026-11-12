@@ -34,7 +34,8 @@ import androidx.navigation.compose.rememberNavController
 import com.invernadero.Contenedor
 import com.invernadero.datos.Usuario
 import com.invernadero.ui.acceso.PantallaAcceso
-import com.invernadero.ui.activador.PantallaActivador
+import com.invernadero.ui.historial.PantallaRegistro
+import com.invernadero.ui.controles.PantallaControles
 import com.invernadero.ui.ajustes.PantallaAjustes
 import com.invernadero.ui.historial.PantallaHistorial
 import com.invernadero.ui.monitoreo.PantallaMonitoreo
@@ -53,8 +54,15 @@ fun AppInvernadero(c: Contenedor) {
         c.conexion.reiniciar()
         while (true) {
             delay(15_000)
-            if (c.sesion.expirada()) {
-                withContext(Dispatchers.IO) { c.db.auditar(u.nombre, "SESION", "Cierre automático por inactividad", "OK") }
+            // Un invitado sale apenas su pase vence o lo revocan
+            val paseCerrado = u.invitado && !withContext(Dispatchers.IO) { c.invitaciones.vigente(-u.id) }
+            if (c.sesion.expirada() || paseCerrado) {
+                val motivo = when {
+                    u.invitado && System.currentTimeMillis() > u.vence -> "Fin de la visita: el pase venció"
+                    paseCerrado -> "Fin de la visita: el pase fue revocado"
+                    else -> "Cierre automático por inactividad"
+                }
+                withContext(Dispatchers.IO) { c.db.auditar(u.nombre, if (u.invitado) "INVITADO" else "SESION", motivo, "OK") }
                 c.conexion.detener()
                 c.sesion.cerrar()
                 break
@@ -97,11 +105,12 @@ private data class Destino(val ruta: String, val titulo: String, val icono: Imag
 @Composable
 private fun PantallaConMenu(c: Contenedor, u: Usuario, modoTarde: Boolean, alCambiarModo: (Boolean) -> Unit) {
     val nav = rememberNavController()
+    // Después de entrar siempre se abre Monitoreo
     val destinos = listOf(
         Destino("monitoreo", "Monitoreo", Icons.Filled.Home),
-        Destino("activador", "Activador", Icons.Filled.Build),
+        Destino("controles", "Controles", Icons.Filled.Build),
         Destino("historial", "Historial", Icons.AutoMirrored.Filled.List),
-        Destino("ajustes", "Ajustes", Icons.Filled.Settings),
+        Destino("ajustes", if (u.invitado) "Visita" else "Ajustes", Icons.Filled.Settings),
     )
     val actual by nav.currentBackStackEntryAsState()
 
@@ -110,7 +119,8 @@ private fun PantallaConMenu(c: Contenedor, u: Usuario, modoTarde: Boolean, alCam
             NavigationBar {
                 destinos.forEach { d ->
                     NavigationBarItem(
-                        selected = actual?.destination?.route == d.ruta,
+                        selected = actual?.destination?.route == d.ruta ||
+                            (d.ruta == "historial" && actual?.destination?.route == "registro"),
                         onClick = {
                             nav.navigate(d.ruta) {
                                 popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -127,8 +137,9 @@ private fun PantallaConMenu(c: Contenedor, u: Usuario, modoTarde: Boolean, alCam
     ) { relleno ->
         NavHost(nav, startDestination = "monitoreo", modifier = Modifier.padding(relleno)) {
             composable("monitoreo") { PantallaMonitoreo(c, modoTarde, alCambiarModo) }
-            composable("activador") { PantallaActivador(c, u) }
-            composable("historial") { PantallaHistorial(c) }
+            composable("controles") { PantallaControles(c, u) }
+            composable("historial") { PantallaHistorial(c) { nav.navigate("registro") } }
+            composable("registro") { PantallaRegistro(c) { nav.popBackStack() } }
             composable("ajustes") { PantallaAjustes(c, u) }
         }
     }

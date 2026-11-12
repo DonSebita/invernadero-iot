@@ -1,105 +1,227 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.invernadero.ui.historial
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.invernadero.Contenedor
-import com.invernadero.conexion.EstadoConexion
-import com.invernadero.datos.RegistroAuditoria
+import com.invernadero.conexion.ParametrosControl
 import com.invernadero.datos.RegistroLectura
-import com.invernadero.ui.Dato
-import com.invernadero.ui.GraficaLinea
+import com.invernadero.ui.Encabezado
+import com.invernadero.ui.GraficaSerie
+import com.invernadero.ui.PuntoSerie
 import com.invernadero.ui.Seccion
-import com.invernadero.ui.formatoFecha
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.roundToInt
 
-/** Historial guardado en SQLite + métricas de estabilidad + registro de auditoría. */
+private data class Rango(val etiqueta: String, val ms: Long, val formato: String)
+
+private val Rangos = listOf(
+    Rango("1 hora", 3_600_000L, "HH:mm"),
+    Rango("24 horas", 24 * 3_600_000L, "HH:mm"),
+    Rango("7 días", 7 * 24 * 3_600_000L, "EEE d"),
+)
+
+/** Cómo han evolucionado tus plantas. El registro de actividad está en su propia pantalla. */
 @Composable
-fun PantallaHistorial(c: Contenedor) {
-    val estado by c.conexion.estado.collectAsState()
+fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
+    var rango by rememberSaveable { mutableIntStateOf(1) }
+    var planta by rememberSaveable { mutableIntStateOf(-1) }        // -1 = todas (promedio)
     var lecturas by remember { mutableStateOf<List<RegistroLectura>>(emptyList()) }
-    var auditoria by remember { mutableStateOf<List<RegistroAuditoria>>(emptyList()) }
+    var periodo by remember { mutableStateOf(0L to 0L) }               // [desde, hasta] del eje X
+    val reglas = c.conexion.lectura.collectAsState().value?.parametros ?: ParametrosControl.FABRICA
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(rango) {
+        lecturas = emptyList()
         while (true) {
-            val (l, a) = withContext(Dispatchers.IO) { c.db.ultimasLecturas(120).reversed() to c.db.ultimaAuditoria(60) }
-            lecturas = l
-            auditoria = a
-            delay(10_000)
+            val ahora = System.currentTimeMillis()
+            val desde = ahora - Rangos[rango].ms
+            lecturas = withContext(Dispatchers.IO) { c.db.lecturasDesde(desde) }
+            periodo = desde to ahora
+            delay(30_000)                     // se guarda una lectura cada 30 s
         }
     }
 
+    val sensores = lecturas.maxOfOrNull { it.humedades.size } ?: 0
+    val p = if (planta < sensores) planta else -1
+    val formato = remember(rango) { SimpleDateFormat(Rangos[rango].formato, Locale.forLanguageTag("es")) }
+    val eje: (Long) -> String = { formato.format(Date(it)) }
+    val cs = MaterialTheme.colorScheme
+
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        item { Text("Historial", style = MaterialTheme.typography.headlineSmall) }
-        item { TarjetaEstabilidad(estado) }
         item {
-            Seccion("Temperatura (°C) — últimas ${lecturas.size} lecturas") {
-                GraficaLinea(lecturas.map { it.temperatura }, Color(0xFFFF7043), " °C")
+            Encabezado("Así han crecido tus plantas", "Humedad de la tierra, temperatura y aire a lo largo del tiempo.")
+        }
+
+        // ── Filtros ──
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Filtro("Periodo") {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        Rangos.forEachIndexed { i, r ->
+                            SegmentedButton(
+                                selected = rango == i,
+                                onClick = { rango = i },
+                                shape = SegmentedButtonDefaults.itemShape(i, Rangos.size),
+                                label = { Text(r.etiqueta) }
+                            )
+                        }
+                    }
+                }
+                if (sensores > 1) Filtro("Planta") {
+                    val ultima = lecturas.lastOrNull()
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item {
+                            ChipPlanta("Todas", ultima?.humedadSuelo, p == -1) { planta = -1 }
+                        }
+                        items(sensores) { i ->
+                            ChipPlanta("Planta ${i + 1}", ultima?.humedades?.getOrNull(i), p == i) { planta = i }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Gráficas ──
+        item {
+            Seccion(
+                "Humedad de la tierra",
+                subtitulo = when {
+                    p >= 0 -> "Planta ${p + 1}"
+                    sensores > 1 -> "Promedio de $sensores sensores"
+                    else -> null
+                }
+            ) {
+                GraficaSerie(
+                    puntos = lecturas.map { PuntoSerie(it.ts, if (p == -1) it.humedadSuelo else it.humedades.getOrNull(p) ?: it.humedadSuelo) },
+                    color = cs.secondary,
+                    unidad = "%",
+                    nombre = "Humedad de la tierra",
+                    etiquetaEje = eje,
+                    limites = 0f..100f,
+                    spanMinimo = 10f,
+                    desde = periodo.first, hasta = periodo.second
+                )
             }
         }
         item {
-            Seccion("Humedad de suelo promedio (%)") {
-                GraficaLinea(lecturas.map { it.humedadSuelo }, MaterialTheme.colorScheme.secondary, "%")
+            Seccion("Temperatura", subtitulo = "La franja marca donde la ventana abre sola (${reglas.ventanaDesde}–${reglas.ventanaHasta} °C)") {
+                GraficaSerie(
+                    puntos = lecturas.map { PuntoSerie(it.ts, it.temperatura) },
+                    color = cs.tertiary,
+                    unidad = "°C",
+                    nombre = "Temperatura",
+                    etiquetaEje = eje,
+                    spanMinimo = 4f,
+                    banda = reglas.ventanaDesde.toFloat()..reglas.ventanaHasta.toFloat(),
+                    etiquetaBanda = "ventana automática",
+                    desde = periodo.first, hasta = periodo.second
+                )
             }
         }
+        val aire = lecturas.mapNotNull { l -> l.humedadAire?.let { PuntoSerie(l.ts, it) } }
+        if (aire.size >= 2) item {
+            Seccion("Humedad del aire") {
+                GraficaSerie(
+                    puntos = aire,
+                    color = cs.primary,
+                    unidad = "%",
+                    nombre = "Humedad del aire",
+                    etiquetaEje = eje,
+                    limites = 0f..100f,
+                    spanMinimo = 10f,
+                    desde = periodo.first, hasta = periodo.second,
+                    banda = if (reglas.ventilaPorHumedad) reglas.humedadMaxima.toFloat()..100f else null,
+                    etiquetaBanda = "se ventila"
+                )
+            }
+        }
+
+        // ── Enlace al registro ──
         item {
-            Seccion("Ventilador (PWM)") {
-                GraficaLinea(lecturas.map { it.pwm.toFloat() }, MaterialTheme.colorScheme.primary, "")
+            Surface(
+                onClick = alVerRegistro,
+                shape = MaterialTheme.shapes.large,
+                color = cs.secondaryContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Ver registro de actividad", style = MaterialTheme.typography.titleMedium, color = cs.onSecondaryContainer)
+                        Text(
+                            "Entradas, órdenes enviadas, visitas y estabilidad de la conexión.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = cs.onSecondaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = cs.onSecondaryContainer)
+                }
             }
-        }
-        item { Text("Registro de auditoría", style = MaterialTheme.typography.titleMedium) }
-        items(auditoria) { a ->
-            ListItem(
-                overlineContent = { Text(formatoFecha(a.ts)) },
-                headlineContent = { Text("${a.accion} · ${a.resultado}") },
-                supportingContent = { Text("${a.usuario} — ${a.detalle}") },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-            )
-            HorizontalDivider()
         }
     }
 }
 
-/** Evidencia para "estabilidad y eficiencia de la interconexión". */
 @Composable
-private fun TarjetaEstabilidad(e: EstadoConexion) {
-    val minutos = (System.currentTimeMillis() - e.desde) / 60_000
-    val totalCmd = e.comandosOk + e.comandosFallidos
-    val esperadas = if (e.intervaloPromedioMs > 0) ((System.currentTimeMillis() - e.desde) / 2000).coerceAtLeast(1) else 0
-    Seccion("Estabilidad de la conexión") {
-        Dato("Medio", e.descripcion)
-        Dato("Estado", if (e.conectado) "Conectado" else (e.mensaje ?: "Sin conexión"))
-        Dato("Tiempo midiendo", "$minutos min")
-        Dato("Lecturas recibidas", if (esperadas > 0) "${e.recibidos} (~${(e.recibidos * 100 / esperadas).coerceAtMost(100)}% de las esperadas)" else "${e.recibidos}")
-        Dato("Intervalo promedio", "${e.intervaloPromedioMs} ms (esperado 2000 ms)")
-        Dato("Latencia promedio / máx.", "${e.latenciaPromedioMs} / ${e.latenciaMaxMs} ms")
-        Dato("Cortes (> 6 s sin datos)", "${e.cortes}")
-        Dato("Fallas / reintentos", "${e.fallas}")
-        Dato("Comandos OK / fallidos", "${e.comandosOk} / ${e.comandosFallidos}" + if (totalCmd > 0) "  (${e.comandosOk * 100 / totalCmd}% éxito)" else "")
-        Dato("Comandos denegados (rol o inválidos)", "${e.comandosDenegados}")
-        if (e.compartiendo) Dato("Teléfonos remotos conectados", "${e.telefonosConectados}")
+private fun Filtro(titulo: String, contenido: @Composable () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(titulo, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        contenido()
     }
+}
+
+/** Chip de planta con su humedad actual, para elegir sabiendo cuál está más seca. */
+@Composable
+private fun ChipPlanta(nombre: String, humedad: Float?, elegido: Boolean, alElegir: () -> Unit) {
+    FilterChip(
+        selected = elegido,
+        onClick = alElegir,
+        label = {
+            Text(if (humedad != null) "$nombre · ${humedad.roundToInt()}%" else nombre)
+        },
+        leadingIcon = if (elegido) {
+            { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize)) }
+        } else null
+    )
 }

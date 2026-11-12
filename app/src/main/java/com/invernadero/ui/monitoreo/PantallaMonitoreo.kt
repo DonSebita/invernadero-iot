@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.invernadero.ui.monitoreo
 
 import androidx.compose.animation.core.animateFloatAsState
@@ -24,6 +26,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,6 +81,8 @@ import com.invernadero.Contenedor
 import com.invernadero.conexion.Comandos
 import com.invernadero.conexion.EstadoConexion
 import com.invernadero.conexion.LecturaEsp32
+import com.invernadero.ui.FuenteTexto
+import com.invernadero.ui.FuenteTitulos
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.abs
@@ -82,6 +90,7 @@ import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.cos
 import kotlin.math.sin
 import androidx.compose.ui.geometry.lerp as lerpOffset
 
@@ -89,6 +98,7 @@ import androidx.compose.ui.geometry.lerp as lerpOffset
 sealed interface Parametro {
     data class Planta(val indice: Int) : Parametro
     data object Temperatura : Parametro
+    data object HumedadAire : Parametro
     data object Ventilador : Parametro
     data object Ventana : Parametro
 }
@@ -176,45 +186,97 @@ fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean
 @Composable
 private fun BarraSuperior(p: Paleta, modoTarde: Boolean, alCambiar: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(p.tarjeta).padding(horizontal = 16.dp, vertical = 6.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(p.tarjeta).padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("Monitoreo", color = p.texto, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-        BotonModo("☀ Día", !modoTarde, p) { alCambiar(false) }
-        Spacer(Modifier.width(8.dp))
-        BotonModo("🌇 Tarde", modoTarde, p) { alCambiar(true) }
+        Text("Monitoreo", color = p.texto, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        val colores = SegmentedButtonDefaults.colors(
+            activeContainerColor = p.botonActivo,
+            activeContentColor = p.textoBoton,
+            activeBorderColor = p.botonActivo,
+            inactiveContainerColor = Color.Transparent,
+            inactiveContentColor = p.texto,
+            inactiveBorderColor = p.texto.copy(alpha = 0.35f),
+        )
+        SingleChoiceSegmentedButtonRow {
+            SegmentedButton(
+                selected = !modoTarde,
+                onClick = { alCambiar(false) },
+                shape = SegmentedButtonDefaults.itemShape(0, 2),
+                colors = colores,
+                icon = { IconoSol(Modifier.size(18.dp)) },
+                label = { Text("Día") }
+            )
+            SegmentedButton(
+                selected = modoTarde,
+                onClick = { alCambiar(true) },
+                shape = SegmentedButtonDefaults.itemShape(1, 2),
+                colors = colores,
+                icon = { IconoAtardecer(Modifier.size(18.dp)) },
+                label = { Text("Tarde") }
+            )
+        }
     }
 }
 
+/** Sol: disco + 8 rayos, dibujado con el color de contenido actual. */
 @Composable
-private fun BotonModo(texto: String, activo: Boolean, p: Paleta, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (activo) p.botonActivo else Color.Transparent,
-            contentColor = if (activo) p.textoBoton else p.texto
-        ),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-    ) { Text(texto, fontSize = 13.sp) }
+private fun IconoSol(modifier: Modifier) {
+    val color = androidx.compose.material3.LocalContentColor.current
+    Canvas(modifier) {
+        val c = center
+        val r = size.minDimension * 0.22f
+        drawCircle(color, r, c)
+        val trazo = size.minDimension * 0.09f
+        for (k in 0 until 8) {
+            val ang = k * PI.toFloat() / 4f
+            val dir = Offset(kotlin.math.cos(ang), sin(ang))
+            drawLine(color, c + dir * (r * 1.55f), c + dir * (size.minDimension * 0.47f), trazo, StrokeCap.Round)
+        }
+    }
+}
+
+/** Atardecer: medio sol sobre el horizonte, con tres rayos. */
+@Composable
+private fun IconoAtardecer(modifier: Modifier) {
+    val color = androidx.compose.material3.LocalContentColor.current
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val trazo = size.minDimension * 0.09f
+        val horizonte = h * 0.72f
+        val r = w * 0.24f
+        drawArc(color, 180f, 180f, true, Offset(w / 2f - r, horizonte - r), Size(r * 2, r * 2))
+        drawLine(color, Offset(w * 0.06f, horizonte), Offset(w * 0.94f, horizonte), trazo, StrokeCap.Round)
+        val c = Offset(w / 2f, horizonte)
+        for (ang in listOf(-150f, -90f, -30f)) {
+            val rad = ang * PI.toFloat() / 180f
+            val dir = Offset(kotlin.math.cos(rad), sin(rad))
+            drawLine(color, c + dir * (r * 1.45f), c + dir * (r * 1.95f), trazo, StrokeCap.Round)
+        }
+    }
 }
 
 @Composable
 private fun BarraEstado(lectura: LecturaEsp32?, e: EstadoConexion, p: Paleta) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(p.tarjeta).padding(horizontal = 16.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(p.tarjeta).padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(if (e.conectado) p.verde else Color(0xFFE53935)))
-        Spacer(Modifier.width(8.dp))
+        Box(Modifier.size(10.dp).clip(CircleShape).background(if (e.conectado) p.verde else MaterialTheme.colorScheme.error))
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(e.descripcion, color = p.texto, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(e.descripcion, color = p.texto, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 e.mensaje ?: if (e.compartiendo) "Compartiendo con ${e.telefonosConectados} teléfono(s)" else "Toca un dato para modificarlo",
-                color = p.texto, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                color = p.texto.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
         }
         if (lectura != null) {
-            Text("${lectura.humedades.size} sensores", color = p.verde, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.clip(CircleShape).background(p.verde.copy(alpha = 0.16f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+                Text("${lectura.humedades.size} sensores", color = p.verde, style = MaterialTheme.typography.labelMedium)
+            }
         }
     }
 }
@@ -255,9 +317,139 @@ private fun DrawScope.dibujarCielo(t: Float, tarde: Float) {
         dibujarNube(Offset(x, h * n.y), ancho, colorNube.copy(alpha = alpha))
     }
 
-    // Colinas (dos capas)
-    colina(h * 0.80f, h * 0.035f, 1.4f, 0.4f, lerp(Color(0xFFA5D6A7), Color(0xFF7A4F55), tarde))
-    colina(h * 0.88f, h * 0.030f, 2.2f, 1.9f, lerp(Color(0xFF81C784), Color(0xFF4E3440), tarde))
+    // Paisaje en tres capas: cada colina con su vegetación; lo lejano más chico y desteñido (profundidad)
+    val luz = 1f - 2f * tarde          // de día la luz viene de la derecha; al atardecer, de la izquierda
+    val lejana = Colina(h * 0.74f, h * 0.030f, 1.1f, 2.6f)
+    colina(lejana.base, lejana.amplitud, lejana.frecuencia, lejana.fase, lerp(Color(0xFFBBDCC3), Color(0xFF8E5A62), tarde))
+    val tonoLejos = TonoArbol(
+        copa = lerp(Color(0xFF93C79E), Color(0xFF74485A), tarde), pino = lerp(Color(0xFF84BB92), Color(0xFF6A4152), tarde),
+        arbusto = lerp(Color(0xFF9CCDA6), Color(0xFF7A4C5E), tarde), tronco = lerp(Color(0xFF86A08D), Color(0xFF5E3B4A), tarde)
+    )
+    for (a in ARBOLES_LEJOS) dibujarArbol(a, lejana, h * 0.050f, tonoLejos, t, luz, tarde)
+
+    val media = Colina(h * 0.80f, h * 0.035f, 1.4f, 0.4f)
+    colina(media.base, media.amplitud, media.frecuencia, media.fase, lerp(Color(0xFFA5D6A7), Color(0xFF7A4F55), tarde))
+    val tonoMedio = TonoArbol(
+        copa = lerp(Color(0xFF62AB6D), Color(0xFF5C3645), tarde), pino = lerp(Color(0xFF4C915E), Color(0xFF4E2E3C), tarde),
+        arbusto = lerp(Color(0xFF6DB477), Color(0xFF633B4B), tarde), tronco = lerp(Color(0xFF7A5A43), Color(0xFF3F2733), tarde)
+    )
+    for (a in ARBOLES_MEDIO) dibujarArbol(a, media, h * 0.080f, tonoMedio, t, luz, tarde)
+
+    val cercana = Colina(h * 0.88f, h * 0.030f, 2.2f, 1.9f)
+    colina(cercana.base, cercana.amplitud, cercana.frecuencia, cercana.fase, lerp(Color(0xFF81C784), Color(0xFF4E3440), tarde))
+    val tonoCerca = TonoArbol(
+        copa = lerp(Color(0xFF3F8F4E), Color(0xFF462A37), tarde), pino = lerp(Color(0xFF2F7745), Color(0xFF3A2230), tarde),
+        arbusto = lerp(Color(0xFF55A15E), Color(0xFF4F2F3D), tarde), tronco = lerp(Color(0xFF6B4B36), Color(0xFF33202A), tarde)
+    )
+    for (a in ARBOLES_CERCA) dibujarArbol(a, cercana, h * 0.105f, tonoCerca, t, luz, tarde)
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Vegetación del fondo: árboles de copa, pinos, arbustos y pasto
+// ─────────────────────────────────────────────────────────────
+private class Colina(val base: Float, val amplitud: Float, val frecuencia: Float, val fase: Float)
+
+/** Altura de la colina en x (misma fórmula que colina()). */
+private fun DrawScope.sueloEn(c: Colina, x: Float) =
+    c.base - c.amplitud * sin(x / size.width * PI.toFloat() * c.frecuencia + c.fase)
+
+private enum class TipoArbol { COPA, PINO, ARBUSTO, PASTO }
+
+/** x en fracción del ancho; escala relativa; fase para que no se mezan todos a la vez. */
+private class Arbol(val x: Float, val tipo: TipoArbol, val escala: Float = 1f, val fase: Float = x * 9.1f)
+
+private class TonoArbol(val copa: Color, val pino: Color, val arbusto: Color, val tronco: Color)
+
+private val ARBOLES_LEJOS = listOf(
+    Arbol(0.02f, TipoArbol.PINO, 0.9f), Arbol(0.06f, TipoArbol.COPA, 1.1f), Arbol(0.10f, TipoArbol.PINO, 1.2f),
+    Arbol(0.29f, TipoArbol.COPA, 0.9f), Arbol(0.33f, TipoArbol.PINO, 1.0f),
+    Arbol(0.61f, TipoArbol.PINO, 1.1f), Arbol(0.65f, TipoArbol.COPA, 1.0f), Arbol(0.69f, TipoArbol.PINO, 0.8f),
+    Arbol(0.87f, TipoArbol.COPA, 1.0f), Arbol(0.92f, TipoArbol.PINO, 1.2f), Arbol(0.97f, TipoArbol.COPA, 0.9f),
+)
+
+private val ARBOLES_MEDIO = listOf(
+    Arbol(0.04f, TipoArbol.PINO, 1.1f), Arbol(0.11f, TipoArbol.COPA, 1.0f), Arbol(0.18f, TipoArbol.ARBUSTO, 0.9f),
+    Arbol(0.40f, TipoArbol.COPA, 0.9f), Arbol(0.57f, TipoArbol.PINO, 1.0f),
+    Arbol(0.79f, TipoArbol.COPA, 1.15f), Arbol(0.86f, TipoArbol.PINO, 0.95f), Arbol(0.95f, TipoArbol.ARBUSTO, 1.0f),
+)
+
+private val ARBOLES_CERCA = listOf(
+    Arbol(0.02f, TipoArbol.COPA, 1.2f), Arbol(0.09f, TipoArbol.ARBUSTO, 1.0f), Arbol(0.15f, TipoArbol.PASTO),
+    Arbol(0.26f, TipoArbol.PASTO, 0.9f), Arbol(0.35f, TipoArbol.ARBUSTO, 0.8f), Arbol(0.49f, TipoArbol.PASTO),
+    Arbol(0.63f, TipoArbol.ARBUSTO, 0.9f), Arbol(0.72f, TipoArbol.PASTO, 1.1f), Arbol(0.84f, TipoArbol.ARBUSTO, 1.1f),
+    Arbol(0.92f, TipoArbol.PINO, 1.1f), Arbol(0.98f, TipoArbol.PASTO, 0.9f),
+)
+
+private fun DrawScope.dibujarArbol(a: Arbol, colina: Colina, altoBase: Float, tono: TonoArbol, t: Float, luz: Float, tarde: Float) {
+    val x = a.x * size.width
+    val suelo = sueloEn(colina, x) + altoBase * 0.06f      // un poco enterrado, para que no flote
+    val alto = altoBase * a.escala
+    val brisa = sin(t * 0.9f + a.fase) * alto * 0.035f      // vaivén muy leve de la copa
+    val brillo = lerp(Color.White, Color(0xFFFFC9A0), tarde).copy(alpha = 0.16f)
+
+    when (a.tipo) {
+        TipoArbol.COPA -> {
+            val ancho = alto * 0.11f
+            drawRect(tono.tronco, Offset(x - ancho / 2f, suelo - alto * 0.48f), Size(ancho, alto * 0.48f))
+            val cx = x + brisa
+            val copa = Path().apply {
+                addOval(Rect(Offset(cx, suelo - alto * 0.62f), alto * 0.30f))
+                addOval(Rect(Offset(cx - alto * 0.20f, suelo - alto * 0.50f), alto * 0.21f))
+                addOval(Rect(Offset(cx + alto * 0.20f, suelo - alto * 0.52f), alto * 0.22f))
+                addOval(Rect(Offset(cx + brisa * 0.4f, suelo - alto * 0.82f), alto * 0.20f))
+            }
+            drawPath(copa, tono.copa)
+            drawCircle(brillo, alto * 0.16f, Offset(cx + luz * alto * 0.12f, suelo - alto * 0.72f))
+        }
+        TipoArbol.PINO -> {
+            val ancho = alto * 0.08f
+            drawRect(tono.tronco, Offset(x - ancho / 2f, suelo - alto * 0.22f), Size(ancho, alto * 0.22f))
+            val pisos = listOf(Triple(0.18f, 0.56f, 0.30f), Triple(0.40f, 0.80f, 0.24f), Triple(0.60f, 1.00f, 0.17f))
+            for ((i, piso) in pisos.withIndex()) {
+                val (abajo, arriba, mitad) = piso
+                val dx = brisa * (0.4f + i * 0.3f)
+                val tri = Path().apply {
+                    moveTo(x - alto * mitad, suelo - alto * abajo)
+                    lineTo(x + alto * mitad, suelo - alto * abajo)
+                    lineTo(x + dx, suelo - alto * arriba)
+                    close()
+                }
+                drawPath(tri, tono.pino)
+            }
+            // Lado iluminado del pino
+            val luzPino = Path().apply {
+                moveTo(x + brisa, suelo - alto)
+                lineTo(x + luz * alto * 0.30f, suelo - alto * 0.18f)
+                lineTo(x, suelo - alto * 0.18f)
+                close()
+            }
+            drawPath(luzPino, brillo.copy(alpha = 0.10f))
+        }
+        TipoArbol.ARBUSTO -> {
+            val r = alto * 0.20f
+            val mata = Path().apply {
+                addOval(Rect(Offset(x - r * 0.9f + brisa * 0.3f, suelo - r * 0.55f), r * 0.85f))
+                addOval(Rect(Offset(x + brisa * 0.5f, suelo - r * 0.85f), r * 1.1f))
+                addOval(Rect(Offset(x + r * 0.95f + brisa * 0.3f, suelo - r * 0.5f), r * 0.8f))
+            }
+            drawPath(mata, tono.arbusto)
+            drawCircle(brillo, r * 0.5f, Offset(x + luz * r * 0.5f, suelo - r * 1.2f))
+        }
+        TipoArbol.PASTO -> {
+            val grosor = (alto * 0.035f).coerceAtLeast(1.5f)
+            for (k in -3..3) {
+                val largo = alto * (0.22f + 0.06f * ((k * 7 + 3) % 4))
+                val inclinacion = k * alto * 0.035f + brisa * 1.5f
+                drawLine(
+                    tono.arbusto,
+                    Offset(x + k * alto * 0.035f, suelo),
+                    Offset(x + k * alto * 0.035f + inclinacion, suelo - largo),
+                    grosor,
+                    StrokeCap.Round
+                )
+            }
+        }
+    }
 }
 
 /** Una nube = un solo Path con varios óvalos (así no se ven las uniones al ser semitransparente). */
@@ -316,15 +508,17 @@ private fun EscenaInvernadero(
     ) {
         if (lectura == null) {
             zonas.clear()
-            val txt = medidor.measure("Esperando datos…", TextStyle(color = paleta.texto, fontSize = 16.sp))
+            val txt = medidor.measure("Esperando datos…", TextStyle(color = paleta.texto, fontSize = 16.sp, fontFamily = FuenteTexto))
             drawText(txt, topLeft = center - Offset(txt.size.width / 2f, txt.size.height / 2f))
             return@Canvas
         }
         // La caja ocupa la mayor parte del ancho; las etiquetas flotan encima con su propio fondo
         val margen = 36.dp.toPx()
-        val escala = min((size.width - 2 * margen) / 1.85f, size.height / 1.5f)
-        // un poco a la derecha (la ventana abierta sobresale a la izquierda) y abajo, sobre las colinas
-        val cam = Camara(YAW_GRADOS, PITCH_GRADOS, escala, center + Offset(size.width * 0.04f, size.height * 0.08f))
+        // La caja es la protagonista (~85% del ancho útil) y queda un poco sobre el centro: arriba van
+        // los datos de aire/ventilador/ventana y abajo la media luna con los sensores de tierra
+        val escala = min((size.width - 2 * margen) * 0.86f / 1.85f, size.height / 2.35f)
+        // un poco a la derecha (la ventana abierta sobresale a la izquierda)
+        val cam = Camara(YAW_GRADOS, PITCH_GRADOS, escala, Offset(size.width * 0.54f, size.height * 0.40f))
 
         val anclas = dibujarEscena(
             cam,
@@ -339,27 +533,44 @@ private fun EscenaInvernadero(
             paleta
         )
 
-        val etiquetas = buildList {
-            anclas.plantas.forEachIndexed { i, a ->
-                val estado = lectura.estadosSuelo.getOrNull(i)
-                add(Etiqueta(a, "${lectura.humedades[i].roundToInt()}%", estado ?: "Humedad suelo ${i + 1}", Parametro.Planta(i)))
-            }
-            val aire = lectura.humedadAmbiente?.let { " · aire ${it.roundToInt()}%" } ?: ""
-            add(Etiqueta(anclas.temperatura, "%.1f °C".format(lectura.temperatura), "Temperatura$aire", Parametro.Temperatura))
-            add(Etiqueta(
+        val n = anclas.plantas.size
+        val plantas = anclas.plantas.mapIndexed { i, a ->
+            // Con pocas plantas cabe el estado del suelo; con muchas, solo el nombre (el estado sale al tocar)
+            val titulo = if (n <= 3) lectura.estadosSuelo.getOrNull(i) ?: "Planta ${i + 1}" else "Planta ${i + 1}"
+            Etiqueta(a, "${lectura.humedades[i].roundToInt()}%", titulo, Parametro.Planta(i))
+        }
+        // La humedad del aire se mide "en el aire" de la caja: el punto flota arriba, sobre las plantas
+        val anclaAire = cam.proyectar(Vec3(0.22f, 0.30f, -0.18f))
+        val laterales = listOfNotNull(
+            Etiqueta(anclas.temperatura, "%.1f °C".format(lectura.temperatura), "Temperatura", Parametro.Temperatura),
+            lectura.humedadAmbiente?.let {
+                Etiqueta(anclaAire, "${it.roundToInt()}%", "Humedad del aire", Parametro.HumedadAire, izquierda = false)
+            },
+            Etiqueta(
                 anclas.ventilador,
                 if (lectura.ventiladorEncendido) "${(lectura.velocidadVentilador * 100).roundToInt()}%" else "OFF",
                 "Ventilador · ${lectura.modoVentilador.lowercase()}",
-                Parametro.Ventilador
-            ))
-            add(Etiqueta(anclas.ventana, "${lectura.anguloVentana.roundToInt()}°", "Ventana · ${lectura.modoVentana.lowercase()}", Parametro.Ventana))
-        }
+                Parametro.Ventilador,
+                izquierda = false,
+                porFuera = true
+            ),
+            Etiqueta(anclas.ventana, "${lectura.anguloVentana.roundToInt()}°", "Ventana · ${lectura.modoVentana.lowercase()}", Parametro.Ventana, izquierda = true, porFuera = true),
+        )
         zonas.clear()
-        dibujarEtiquetas(etiquetas, medidor, paleta, tiempo.value, seleccionado, zonas, anclas.techo)
+        dibujarEtiquetas(laterales, medidor, paleta, tiempo.value, seleccionado, zonas, anclas.techo, desfase = n)
+        dibujarMediaLuna(plantas, medidor, paleta, tiempo.value, seleccionado, zonas, anclas.base)
     }
 }
 
-private data class Etiqueta(val ancla: Offset, val valor: String, val titulo: String, val parametro: Parametro)
+/** [izquierda]: lado fijo de la tarjeta (null = el lado más cercano al objeto). */
+private data class Etiqueta(
+    val ancla: Offset,
+    val valor: String,
+    val titulo: String,
+    val parametro: Parametro,
+    val izquierda: Boolean? = null,
+    val porFuera: Boolean = false     // la línea entra por el borde exterior de la tarjeta (el del lado de la pantalla)
+)
 
 /** Círculo sobre el objeto → línea diagonal → línea horizontal → dato con fondo (estilo Paint). */
 private fun DrawScope.dibujarEtiquetas(
@@ -369,17 +580,18 @@ private fun DrawScope.dibujarEtiquetas(
     t: Float,
     seleccionado: Parametro?,
     zonas: MutableList<ZonaToque>,
-    techo: Float
+    techo: Float,
+    desfase: Int = 0
 ) {
-    val estiloValor = TextStyle(color = p.verde, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-    val estiloTitulo = TextStyle(color = p.texto, fontSize = 11.sp)
+    val estiloValor = TextStyle(color = p.verde, fontSize = 19.sp, fontWeight = FontWeight.Bold, fontFamily = FuenteTitulos, fontFeatureSettings = "tnum")
+    val estiloTitulo = TextStyle(color = p.texto, fontSize = 11.sp, fontFamily = FuenteTexto, letterSpacing = 0.2.sp)
     val margen = 6.dp.toPx()
     val separacion = 52.dp.toPx()
     val grosor = 1.6.dp.toPx()
-    val relleno = 6.dp.toPx()
+    val relleno = 8.dp.toPx()
 
     lista.withIndex()
-        .groupBy { it.value.ancla.x < size.width / 2f }
+        .groupBy { it.value.izquierda ?: (it.value.ancla.x < size.width / 2f) }
         .forEach { (izquierda, grupo) ->
             // Las etiquetas van en el cielo, SOBRE el techo de la caja, apiladas hacia arriba.
             // El objeto más cercano al borde toma la fila más baja (si están casi alineados, el más bajo):
@@ -405,14 +617,29 @@ private fun DrawScope.dibujarEtiquetas(
                 val anchoTexto = max(valor.size.width, titulo.size.width).toFloat()
                 val y = ys[k]
                 val hueco = 6.dp.toPx()
-                val xFin = if (izquierda) margen + relleno + anchoTexto + hueco else size.width - margen - relleno - anchoTexto - hueco
-                val dy = abs(e.ancla.y - y)
-                val codoX = if (izquierda) max(e.ancla.x - dy * 0.6f, xFin + 8.dp.toPx())
-                            else min(e.ancla.x + dy * 0.6f, xFin - 8.dp.toPx())
-                val codo = Offset(codoX, y)
-
-                drawLine(p.linea, e.ancla, codo, grosor, StrokeCap.Round)
-                drawLine(p.linea, codo, Offset(xFin, y), grosor, StrokeCap.Round)
+                // Con porFuera la tarjeta se corre hacia adentro para dejar un pasillo junto al borde de la pantalla
+                val pasillo = if (e.porFuera) 16.dp.toPx() else 0f
+                val xFin = if (izquierda) margen + pasillo + relleno + anchoTexto + hueco
+                           else size.width - margen - pasillo - relleno - anchoTexto - hueco
+                if (e.porFuera) {
+                    // objeto → hacia el borde → sube por el pasillo → entra por el lado exterior de la tarjeta
+                    val xPasillo = if (izquierda) margen + pasillo * 0.45f else size.width - margen - pasillo * 0.45f
+                    val xBorde = if (izquierda) margen + pasillo else size.width - margen - pasillo
+                    val ruta = Path().apply {
+                        moveTo(e.ancla.x, e.ancla.y)
+                        lineTo(xPasillo, e.ancla.y)
+                        lineTo(xPasillo, y)
+                        lineTo(xBorde, y)
+                    }
+                    drawPath(ruta, p.linea, style = Stroke(grosor, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+                } else {
+                    val dy = abs(e.ancla.y - y)
+                    val codoX = if (izquierda) max(e.ancla.x - dy * 0.6f, xFin + 8.dp.toPx())
+                                else min(e.ancla.x + dy * 0.6f, xFin - 8.dp.toPx())
+                    val codo = Offset(codoX, y)
+                    drawLine(p.linea, e.ancla, codo, grosor, StrokeCap.Round)
+                    drawLine(p.linea, codo, Offset(xFin, y), grosor, StrokeCap.Round)
+                }
 
                 // Fondo del dato (para leerlo aunque quede sobre la caja)
                 val xValor = if (izquierda) xFin - hueco - valor.size.width else xFin + hueco
@@ -420,20 +647,95 @@ private fun DrawScope.dibujarEtiquetas(
                 val izq = min(xValor, xTitulo) - relleno
                 val der = max(xValor + valor.size.width, xTitulo + titulo.size.width) + relleno
                 val bloque = Rect(izq, y - valor.size.height - relleno * 0.6f, der, y + titulo.size.height + relleno)
-                drawRoundRect(p.tarjeta, bloque.topLeft, bloque.size, CornerRadius(10.dp.toPx()))
+                drawRoundRect(p.tarjeta, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()))
                 if (elegido) {
-                    drawRoundRect(p.verde, bloque.topLeft, bloque.size, CornerRadius(10.dp.toPx()), style = Stroke(2.dp.toPx()))
+                    drawRoundRect(p.verde, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()), style = Stroke(2.dp.toPx()))
                 }
                 drawText(valor, topLeft = Offset(xValor, y - valor.size.height))
                 drawText(titulo, topLeft = Offset(xTitulo, y + 1.dp.toPx()))
 
-                dibujarLatido(e.ancla, t + indice * 0.37f, p, elegido)
+                dibujarLatido(e.ancla, t + (indice + desfase) * 0.37f, p, elegido)
 
                 // Zonas tocables: el bloque de texto y el círculo
                 zonas += ZonaToque(e.parametro, bloque.inflate(6.dp.toPx()))
                 zonas += ZonaToque(e.parametro, Rect(e.ancla, 22.dp.toPx()))
             }
         }
+}
+
+/**
+ * Sensores de tierra: tarjetas repartidas en media luna bajo la caja (medio óvalo, separadas por
+ * igual a lo largo del arco). Se ordenan según dónde está cada sensor, de izquierda a derecha,
+ * para que las líneas no se crucen; cada línea termina en el borde de su tarjeta.
+ */
+private fun DrawScope.dibujarMediaLuna(
+    lista: List<Etiqueta>,
+    medidor: TextMeasurer,
+    p: Paleta,
+    t: Float,
+    seleccionado: Parametro?,
+    zonas: MutableList<ZonaToque>,
+    base: Float
+) {
+    if (lista.isEmpty()) return
+    val n = lista.size
+    val estiloValor = TextStyle(color = p.verde, fontSize = 19.sp, fontWeight = FontWeight.Bold, fontFamily = FuenteTitulos, fontFeatureSettings = "tnum")
+    val estiloTitulo = TextStyle(color = p.texto, fontSize = 11.sp, fontFamily = FuenteTexto, letterSpacing = 0.2.sp)
+    val relleno = 8.dp.toPx()
+    val grosor = 1.6.dp.toPx()
+    val margen = 8.dp.toPx()
+    val textos = lista.map { medidor.measure(it.valor, estiloValor) to medidor.measure(it.titulo, estiloTitulo) }
+    val tamanos = textos.map { (v, ti) -> Size(max(v.size.width, ti.size.width) + 2 * relleno, v.size.height + ti.size.height + relleno * 1.6f) }
+    val anchoMax = tamanos.maxOf { it.width }
+    val altoMax = tamanos.maxOf { it.height }
+
+    // Medio óvalo: extremos justo bajo la caja, el punto más bajo cerca del borde inferior
+    val cx = size.width / 2f
+    val rx = (size.width / 2f - margen - anchoMax / 2f).coerceAtLeast(0f)
+    val yExtremos = base + 14.dp.toPx() + altoMax / 2f
+    val ry = (size.height - margen - altoMax / 2f - yExtremos).coerceIn(0f, rx * 0.8f)
+    val muestras = 72
+    val pts = List(muestras + 1) { k ->
+        val th = PI.toFloat() * k / muestras
+        Offset(cx - rx * cos(th), yExtremos + ry * sin(th))
+    }
+    val acumulado = FloatArray(muestras + 1)
+    for (k in 1..muestras) acumulado[k] = acumulado[k - 1] + (pts[k] - pts[k - 1]).getDistance()
+    val total = acumulado[muestras]
+    fun enArco(f: Float): Offset {
+        val objetivo = f * total
+        var k = 1
+        while (k < muestras && acumulado[k] < objetivo) k++
+        val tramo = (acumulado[k] - acumulado[k - 1]).coerceAtLeast(0.001f)
+        return lerpOffset(pts[k - 1], pts[k], ((objetivo - acumulado[k - 1]) / tramo).coerceIn(0f, 1f))
+    }
+    val centros = arrayOfNulls<Offset>(n)
+    lista.indices.sortedBy { lista[it].ancla.x }.forEachIndexed { pos, i -> centros[i] = enArco((pos + 0.5f) / n) }
+
+    // Primero todas las líneas (así ninguna pasa por encima de otra tarjeta), luego las tarjetas
+    lista.forEachIndexed { i, e ->
+        val c = centros[i]!!
+        val d = e.ancla - c
+        val s = min(
+            if (abs(d.x) > 0.01f) tamanos[i].width / 2f / abs(d.x) else Float.MAX_VALUE,
+            if (abs(d.y) > 0.01f) tamanos[i].height / 2f / abs(d.y) else Float.MAX_VALUE
+        ).coerceAtMost(1f)
+        drawLine(p.linea, e.ancla, c + d * s, grosor, StrokeCap.Round)
+    }
+    lista.forEachIndexed { i, e ->
+        val c = centros[i]!!
+        val (valor, titulo) = textos[i]
+        val tam = tamanos[i]
+        val bloque = Rect(c.x - tam.width / 2f, c.y - tam.height / 2f, c.x + tam.width / 2f, c.y + tam.height / 2f)
+        val elegido = e.parametro == seleccionado
+        drawRoundRect(p.tarjeta, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()))
+        if (elegido) drawRoundRect(p.verde, bloque.topLeft, bloque.size, CornerRadius(14.dp.toPx()), style = Stroke(2.dp.toPx()))
+        drawText(valor, topLeft = Offset(c.x - valor.size.width / 2f, bloque.top + relleno * 0.8f))
+        drawText(titulo, topLeft = Offset(c.x - titulo.size.width / 2f, bloque.top + relleno * 0.8f + valor.size.height))
+        dibujarLatido(e.ancla, t + i * 0.37f, p, elegido)
+        zonas += ZonaToque(e.parametro, bloque.inflate(4.dp.toPx()))
+        zonas += ZonaToque(e.parametro, Rect(e.ancla, 22.dp.toPx()))
+    }
 }
 
 /** Latido lento y suave (≈ 2,4 s por ciclo, doble pulso) con una onda que se desvanece. */
@@ -496,32 +798,34 @@ private fun PanelModificador(
             var ok = true
             for (cod in codigos) if (!c.conexion.enviar(cod)) ok = false
             enviando = false
-            aviso = if (ok) "✔ " + codigos.joinToString(" + ") { Comandos.descripcion(it) } else "✖ No se pudo enviar"
+            aviso = if (ok) "Enviado: " + codigos.joinToString(" + ") { Comandos.descripcion(it) } else "No se pudo enviar. Revisa la conexión."
         }
     }
 
     val titulo = when (parametro) {
         is Parametro.Planta -> "Planta ${parametro.indice + 1}"
         Parametro.Temperatura -> "Temperatura"
+        Parametro.HumedadAire -> "Humedad del aire"
         Parametro.Ventilador -> "Ventilador"
         Parametro.Ventana -> "Ventana"
     }
     val verde = MaterialTheme.colorScheme.secondary
 
     ElevatedCard(
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp)
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)
     ) {
-        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(titulo, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 IconButton(onClick = alCerrar) { Icon(Icons.Filled.Close, contentDescription = "Cerrar") }
             }
-            Column(Modifier.padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (parametro) {
                     is Parametro.Planta -> {
                         val h = l.humedades.getOrNull(parametro.indice) ?: 0f
-                        Text("${h.roundToInt()}% de humedad de suelo", color = verde, style = MaterialTheme.typography.titleLarge)
+                        Text("${h.roundToInt()}% de humedad de suelo", color = verde, style = MaterialTheme.typography.headlineSmall)
                         LinearProgressIndicator(progress = { h / 100f }, modifier = Modifier.fillMaxWidth(), color = verde)
                         Text(l.estadosSuelo.getOrNull(parametro.indice) ?: "", style = MaterialTheme.typography.bodyMedium)
                         Text(
@@ -531,16 +835,30 @@ private fun PanelModificador(
                     }
 
                     Parametro.Temperatura -> {
-                        Text("%.1f °C".format(l.temperatura), color = verde, style = MaterialTheme.typography.titleLarge)
+                        Text("%.1f °C".format(l.temperatura), color = verde, style = MaterialTheme.typography.headlineSmall)
                         l.humedadAmbiente?.let { Text("Humedad del aire: ${it.roundToInt()}%") }
+                        val r = l.parametros ?: com.invernadero.conexion.ParametrosControl.FABRICA
                         Text(
-                            "En automático el ventilador se enciende sobre 25 °C y la ventana se abre entre 20 y 27 °C.",
+                            "En automático el ventilador se enciende sobre ${r.ventiladorSobre} °C y la ventana se abre " +
+                                "entre ${r.ventanaDesde} y ${r.ventanaHasta} °C. Cámbialo en Controles.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilledTonalButton(onClick = { enviar(Comandos.MAXIMO, Comandos.ABRIR) }, enabled = habilitado) { Text("Ventilar") }
                             OutlinedButton(onClick = { enviar(Comandos.AUTOMATICO) }, enabled = habilitado) { Text("Automático") }
                         }
+                    }
+
+                    Parametro.HumedadAire -> {
+                        val ha = l.humedadAmbiente ?: 0f
+                        Text("${ha.roundToInt()}% de humedad del aire", color = verde, style = MaterialTheme.typography.headlineSmall)
+                        LinearProgressIndicator(progress = { ha / 100f }, modifier = Modifier.fillMaxWidth(), color = verde)
+                        Text("Temperatura: %.1f °C".format(l.temperatura), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Medida dentro de la caja por el mismo sensor de la temperatura. Solo se monitorea: " +
+                                "para bajarla, ventila (ventilador y ventana).",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     Parametro.Ventilador -> {
@@ -594,7 +912,7 @@ private fun PanelModificador(
                         TextButton(onClick = { enviar(Comandos.AUTOMATICO) }, enabled = habilitado) { Text("Volver a automático") }
                     }
                 }
-                if (!puedeActivar && parametro !is Parametro.Planta) {
+                if (!puedeActivar && parametro !is Parametro.Planta && parametro != Parametro.HumedadAire) {
                     Text("Tu rol solo permite ver los datos.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 aviso?.let { Text(it, style = MaterialTheme.typography.labelMedium) }

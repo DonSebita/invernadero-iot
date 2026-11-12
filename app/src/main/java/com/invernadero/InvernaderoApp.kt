@@ -5,7 +5,9 @@ import android.content.Context
 import com.invernadero.conexion.ControladorConexion
 import com.invernadero.datos.AjustesRepo
 import com.invernadero.datos.BaseDatos
+import com.invernadero.datos.InvitacionesRepo
 import com.invernadero.datos.Sesion
+import com.invernadero.datos.SesionRecordada
 import com.invernadero.datos.UsuariosRepo
 import com.invernadero.seguridad.CajaFuerte
 
@@ -23,6 +25,8 @@ class Contenedor(context: Context) {
     val caja = CajaFuerte(context)
     val ajustes = AjustesRepo(caja)
     val usuarios = UsuariosRepo(db)
+    val invitaciones = InvitacionesRepo(db)
     val sesion = Sesion()
+    val recordar = SesionRecordada(caja, usuarios)
     val conexion = ControladorConexion(context, db, ajustes, sesion)
 }

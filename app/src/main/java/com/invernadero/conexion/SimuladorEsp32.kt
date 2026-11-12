@@ -21,6 +21,8 @@ class SimuladorEsp32(private val sensores: Int) : FuenteEsp32 {
     private var pwmManual = 0
     private var ventanaManual = false
     private var aperturaManual = 0f
+    private var reglas = ParametrosControl()
+    private var humedadAire = 62f
 
     override fun lecturas(): Flow<EventoFuente> = flow {
         while (true) {
@@ -30,10 +32,22 @@ class SimuladorEsp32(private val sensores: Int) : FuenteEsp32 {
     }
 
     private fun paso(): LecturaEsp32 {
+        val r = reglas
+        val muyHumedo = r.ventilaPorHumedad && humedadAire > r.humedadMaxima
         pwm = if (fanManual) pwmManual
-              else if (temp > 25f) (200 + ((temp - 25f) / 10f * 55f).toInt()).coerceIn(200, 255) else 0
+              else if (temp > r.ventiladorSobre) (200 + ((temp - r.ventiladorSobre) / 10f * 55f).toInt()).coerceIn(200, 255)
+              else if (muyHumedo) 200 else 0
         apertura = if (ventanaManual) aperturaManual
-                   else when { temp > 27f -> 90f; temp < 20f -> 0f; else -> (temp - 20f) / 7f * 90f }
+                   else {
+                       val porTemp = when {
+                           temp > r.ventanaHasta -> 90f
+                           temp < r.ventanaDesde -> 0f
+                           else -> (temp - r.ventanaDesde) / (r.ventanaHasta - r.ventanaDesde) * 90f
+                       }
+                       if (muyHumedo) maxOf(porTemp, 45f) else porTemp
+                   }
+        // El aire se humedece solo con la caja cerrada y se seca al ventilar
+        humedadAire = (humedadAire + 0.25f - pwm / 255f * 0.6f - apertura / 90f * 0.4f + (Random.nextFloat() - 0.5f) * 0.8f).coerceIn(35f, 95f)
         val objetivo = 31f - pwm / 255f * 7f - apertura / 90f * 2f
         temp += (objetivo - temp) * 0.08f + (Random.nextFloat() - 0.5f) * 0.3f
         for (i in hum.indices) {
@@ -46,10 +60,11 @@ class SimuladorEsp32(private val sensores: Int) : FuenteEsp32 {
             ventiladorEncendido = pwm > 0,
             anguloVentana = apertura,
             velocidadVentilador = pwm / 255f,
-            humedadAmbiente = 55f + (Random.nextFloat() - 0.5f) * 4f,
+            humedadAmbiente = humedadAire,
             estadosSuelo = hum.map { estadoSuelo(it) },
             modoVentilador = if (fanManual) "MANUAL" else "AUTO",
-            modoVentana = if (ventanaManual) "MANUAL" else "AUTO"
+            modoVentana = if (ventanaManual) "MANUAL" else "AUTO",
+            parametros = reglas
         )
     }
 
@@ -66,6 +81,10 @@ class SimuladorEsp32(private val sensores: Int) : FuenteEsp32 {
             '-' -> { fanManual = true; pwmManual = (pwmManual - 25).coerceAtLeast(0) }
             'V' -> { fanManual = true; pwmManual = n }
             'X' -> { fanManual = false; ventanaManual = false }
+            'T' -> reglas = reglas.copy(ventiladorSobre = n)
+            'L' -> if (n <= reglas.ventanaHasta - ParametrosControl.SEPARACION_MINIMA) reglas = reglas.copy(ventanaDesde = n) else return@withLock false
+            'H' -> if (n >= reglas.ventanaDesde + ParametrosControl.SEPARACION_MINIMA) reglas = reglas.copy(ventanaHasta = n) else return@withLock false
+            'U' -> reglas = reglas.copy(humedadMaxima = n)
             else -> return@withLock false
         }
         true
