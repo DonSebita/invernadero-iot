@@ -130,7 +130,8 @@ data class Anclas(
     val plantas: List<Offset>,
     val temperatura: Offset,
     val ventilador: Offset,
-    val ventana: Offset
+    val ventana: Offset,
+    val techo: Float          // y en pantalla del punto más alto de la caja
 )
 
 // ─────────────────────────────────────────────────────────────
@@ -185,7 +186,8 @@ fun DrawScope.dibujarEscena(cam: Camara, d: DatosEscena, p: Paleta): Anclas {
     // 6. Ventana de la cara izquierda (mira hacia nosotros)
     val anclaVentana = dibujarVentana(cam, d.anguloVentana, p)
 
-    return Anclas(anclasPlantas, anclaTemp, anclaVentilador, anclaVentana)
+    val techo = caja.flatMap { it.puntos }.minOf { cam.proyectar(it).y }
+    return Anclas(anclasPlantas, anclaTemp, anclaVentilador, anclaVentana, techo)
 }
 
 private fun DrawScope.dibujarCara(cam: Camara, c: Cara, tinte: Color, p: Paleta, frontal: Boolean) {

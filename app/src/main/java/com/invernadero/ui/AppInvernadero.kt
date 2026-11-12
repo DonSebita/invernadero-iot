@@ -11,7 +11,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -74,13 +76,16 @@ fun AppInvernadero(c: Contenedor) {
                     }
                 }
         ) {
-            val u = usuario
-            if (u == null) {
-                PantallaAcceso(c)
-            } else {
-                PantallaConMenu(c, u, modoTarde) { nuevo ->
-                    modoTarde = nuevo
-                    c.ajustes.modoTarde = nuevo
+            // Surface fija el color de texto correcto para el tema (día u oscuro)
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                val u = usuario
+                if (u == null) {
+                    PantallaAcceso(c)
+                } else {
+                    PantallaConMenu(c, u, modoTarde) { nuevo ->
+                        modoTarde = nuevo
+                        c.ajustes.modoTarde = nuevo
+                    }
                 }
             }
         }
