@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "993601984063",
+    "firebase_url": "https://greenbox-a2f1d-default-rtdb.firebaseio.com",
+    "project_id": "greenbox-a2f1d",
+    "storage_bucket": "greenbox-a2f1d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:993601984063:android:54186a74cea46fecb5ca8a",
+        "android_client_info": {
+          "package_name": "com.invernadero"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3qnKT1y_kgxC0wsVTAZPFA5CRliATDwM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
