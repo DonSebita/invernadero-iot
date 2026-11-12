@@ -9,6 +9,7 @@ import com.invernadero.datos.ModoConexion
 import com.invernadero.datos.Rol
 import com.invernadero.datos.Sesion
 import com.invernadero.nube.Nube
+import com.invernadero.nube.Reloj
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,7 +50,7 @@ data class EstadoConexion(
 /** "recién", "hace 3 min", "hace 2 h", "hace 4 días". */
 fun haceCuanto(ts: Long): String {
     if (ts <= 0L) return "sin datos"
-    val min = (System.currentTimeMillis() - ts) / 60_000L
+    val min = ((Reloj.ahora() - ts) / 60_000L).coerceAtLeast(0)
     return when {
         min < 1 -> "recién"
         min < 60 -> "hace $min min"
@@ -157,7 +158,7 @@ class ControladorConexion(
     /** Publica el último estado de la nube (no cuenta para las métricas de estabilidad ni se guarda en SQLite). */
     private fun mostrarNube(l: LecturaEsp32) {
         _lectura.value = l
-        val viejo = System.currentTimeMillis() - l.recibidoEn > 10 * 60_000L
+        val viejo = Reloj.ahora() - l.recibidoEn > 10 * 60_000L
         _estado.update {
             it.copy(
                 desdeNube = true, nubeTs = l.recibidoEn, conectado = !viejo,

@@ -13,7 +13,20 @@
           "package_name": "com.invernadero"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "993601984063-e51lqqn0spfnlfsd6ff1pttc49196lnm.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.invernadero",
+            "certificate_hash": "e6300a63075f66fac3102d5c140b6275052ca7dd"
+          }
+        },
+        {
+          "client_id": "993601984063-ofu4nirm1f593fbps4ph2cenr6vfkidv.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyA3qnKT1y_kgxC0wsVTAZPFA5CRliATDwM"
@@ -21,7 +34,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "993601984063-ofu4nirm1f593fbps4ph2cenr6vfkidv.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

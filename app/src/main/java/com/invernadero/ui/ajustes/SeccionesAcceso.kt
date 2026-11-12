@@ -44,6 +44,7 @@ import com.invernadero.conexion.haceCuanto
 import com.invernadero.datos.Usuario
 import com.invernadero.nube.ConfigEsp32
 import com.invernadero.nube.PaseNube
+import com.invernadero.nube.Reloj
 import com.invernadero.ui.OpcionRadio
 import com.invernadero.ui.Seccion
 import com.invernadero.ui.copiarSensible
@@ -68,7 +69,7 @@ fun horaYDia(ts: Long): String = SimpleDateFormat("EEE d 'a las' HH:mm", Locale.
 
 /** "vence en 3 h" / "vence en 25 min" */
 fun tiempoRestante(vence: Long): String {
-    val min = ((vence - System.currentTimeMillis()) / 60_000L).coerceAtLeast(0)
+    val min = ((vence - Reloj.ahora()) / 60_000L).coerceAtLeast(0)
     return when {
         min >= 48 * 60 -> "quedan ${min / (24 * 60)} días"
         min >= 60 -> "quedan ${min / 60} h"

@@ -38,6 +38,8 @@ Al actualizarlo:
 - No hay SDK de Android en las sesiones en la nube: no se puede compilar ahí; revisar con cuidado y pedir al usuario que compile.
 - Firebase: todo pasa por `nube/Nube.kt`. Estructura y permisos en `firebase/database.rules.json` (si cambias qué se
   guarda en la nube, actualiza las reglas y avísale al usuario que las vuelva a publicar). Necesita `app/google-services.json`.
+- Firebase BoM fijo en **34.6.0**: la 35.x viene compilada con Kotlin 2.4 y el proyecto usa Kotlin 2.2.10 (no compila).
+- Horas de la nube (vencimiento de pases, "hace X min"): usar `Reloj.ahora()` (hora del servidor), no `System.currentTimeMillis()`.
 - Por la nube NO viajan órdenes al ESP32: los comandos siguen siendo locales y firmados con HMAC.
 - El ESP32 sube estado (2 min), resúmenes (5 min) y avisos desde una tarea en el núcleo 0 (`esp32/…ino`, sección NUBE).
 - Base de datos: `datos/BaseDatos.kt` (versión actual 3). Todo cambio de esquema necesita `onUpgrade` sin borrar datos.

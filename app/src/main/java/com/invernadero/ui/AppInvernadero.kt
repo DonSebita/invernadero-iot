@@ -50,6 +50,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.invernadero.Contenedor
 import com.invernadero.datos.Usuario
+import com.invernadero.nube.Reloj
 import com.invernadero.ui.acceso.PantallaAcceso
 import com.invernadero.ui.historial.PantallaRegistro
 import com.invernadero.ui.controles.PantallaControles
@@ -73,7 +74,7 @@ fun AppInvernadero(c: Contenedor) {
             val paseCerrado = u.invitado && !c.nube.paseVigente(u)
             if (c.sesion.expirada() || paseCerrado) {
                 val motivo = when {
-                    u.invitado && System.currentTimeMillis() > u.vence -> "Fin de la visita: el pase venció"
+                    u.invitado && Reloj.ahora() > u.vence -> "Fin de la visita: el pase venció"
                     paseCerrado -> "Fin de la visita: el pase fue revocado"
                     else -> "Cierre automático por inactividad"
                 }

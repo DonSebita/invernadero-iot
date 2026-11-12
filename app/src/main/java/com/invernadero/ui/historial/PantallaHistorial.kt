@@ -46,6 +46,7 @@ import com.invernadero.conexion.haceCuanto
 import com.invernadero.datos.BaseDatos
 import com.invernadero.datos.RegistroLectura
 import com.invernadero.nube.AlertaNube
+import com.invernadero.nube.Reloj
 import com.invernadero.datos.nombrePlanta
 import com.invernadero.ui.Encabezado
 import com.invernadero.ui.GraficaSerie
@@ -94,7 +95,7 @@ fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
     LaunchedEffect(rango, invernadero) {
         enNube = emptyList()
         if (invernadero.isNotEmpty()) {
-            c.nube.resumenes(invernadero, System.currentTimeMillis() - Rangos[rango].ms).catch { }.collect { enNube = it }
+            c.nube.resumenes(invernadero, Reloj.ahora() - Rangos[rango].ms).catch { }.collect { enNube = it }
         }
     }
     LaunchedEffect(invernadero) {
@@ -149,7 +150,7 @@ fun PantallaHistorial(c: Contenedor, alVerRegistro: () -> Unit) {
         }
 
         // ── Avisos que subió el ESP32 a la nube (calor, frío, tierra seca, sensor sin responder…) ──
-        val recientes = avisos.filter { it.ts >= System.currentTimeMillis() - 7 * 24 * 3_600_000L }.take(5)
+        val recientes = avisos.filter { it.ts >= Reloj.ahora() - 7 * 24 * 3_600_000L }.take(5)
         if (recientes.isNotEmpty()) item {
             Seccion("Avisos del invernadero", subtitulo = "Últimos 7 días, desde la nube") {
                 recientes.forEach { a ->

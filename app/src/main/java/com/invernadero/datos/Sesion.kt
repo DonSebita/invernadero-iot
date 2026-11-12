@@ -1,5 +1,7 @@
 package com.invernadero.datos
 
+import com.invernadero.nube.Reloj
+
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +35,6 @@ class Sesion {
     fun expirada(): Boolean {
         val u = _usuario.value ?: return false
         val ahora = System.currentTimeMillis()
-        return (!recordada && ahora - ultimaActividad > INACTIVIDAD_MAX_MS) || (u.invitado && ahora > u.vence)
+        return (!recordada && ahora - ultimaActividad > INACTIVIDAD_MAX_MS) || (u.invitado && Reloj.ahora() > u.vence)
     }
 }

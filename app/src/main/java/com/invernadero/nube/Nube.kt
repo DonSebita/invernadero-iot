@@ -162,6 +162,13 @@ class Nube(private val context: Context, db: BaseDatos, private val caja: CajaFu
 
     init {
         auth?.setLanguageCode("es")          // correos de verificación y recuperación en español
+        // Hora del servidor: los pases vencen según Firebase, no según el reloj del teléfono
+        runCatching {
+            bd?.getReference(".info/serverTimeOffset")?.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(s: DataSnapshot) { (s.value as? Number)?.let { Reloj.desfaseMs = it.toLong() } }
+                override fun onCancelled(e: DatabaseError) {}
+            })
+        }
         // Cada registro de auditoría local también se copia a la nube (solo se puede agregar, no borrar)
         db.espejo = { usuario, accion, detalle, resultado -> espejarAuditoria(usuario, accion, detalle, resultado) }
     }
@@ -383,7 +390,7 @@ class Nube(private val context: Context, db: BaseDatos, private val caja: CajaFu
             val inv = leerServidor(ref("pasesIndice/$hash")).getValue(String::class.java) ?: throw claveMala()
             val p = leerServidor(ref("invernaderos/$inv/pases/$hash"))
             val vence = p.child("vence").getValue(Long::class.java) ?: throw claveMala()
-            if (p.child("revocado").getValue(Boolean::class.java) == true || vence <= System.currentTimeMillis()) throw claveMala()
+            if (p.child("revocado").getValue(Boolean::class.java) == true || vence <= Reloj.ahora()) throw claveMala()
             val puede = p.child("puedeActivar").getValue(Boolean::class.java) == true
             val anfitrion = p.child("creadorNombre").getValue(String::class.java) ?: "tu anfitrión"
             conTiempo {
@@ -411,7 +418,7 @@ class Nube(private val context: Context, db: BaseDatos, private val caja: CajaFu
     /** ¿Sigue abierto el pase de este invitado? Sin Internet se confía en la hora de vencimiento. */
     suspend fun paseVigente(u: Usuario): Boolean {
         if (!u.invitado) return true
-        if (System.currentTimeMillis() > u.vence) return false
+        if (Reloj.ahora() > u.vence) return false
         val h = u.paseHash ?: return false
         val p = runCatching { leerServidor(ref("invernaderos/${u.invernadero}/pases/$h"), 5_000) }.getOrNull() ?: return true
         return p.exists() && p.child("revocado").getValue(Boolean::class.java) != true
@@ -423,7 +430,7 @@ class Nube(private val context: Context, db: BaseDatos, private val caja: CajaFu
         if (pasesAbiertos(u).size >= MAX_PASES) throw ErrorNube("Ya tienes $MAX_PASES pases abiertos. Revoca uno antes de crear otro.")
         val codigo = String(CharArray(LARGO_PASE) { ALFABETO[azar.nextInt(ALFABETO.length)] })
         val hash = sha256(codigo)
-        val vence = System.currentTimeMillis() + duracionMs
+        val vence = Reloj.ahora() + duracionMs
         conTiempo {
             ref("invernaderos/${u.invernadero}/pases/$hash").setValue(
                 mapOf(
@@ -444,7 +451,7 @@ class Nube(private val context: Context, db: BaseDatos, private val caja: CajaFu
             val h = v.child("pase").getValue(String::class.java) ?: return@mapNotNull null
             Triple(h, v.child("nombre").getValue(String::class.java), v.child("ts").getValue(Long::class.java) ?: 0L)
         }?.groupBy { it.first }.orEmpty()
-        val ahora = System.currentTimeMillis()
+        val ahora = Reloj.ahora()
         return pases.children.mapNotNull { p ->
             val h = p.key ?: return@mapNotNull null
             val vence = p.child("vence").getValue(Long::class.java) ?: return@mapNotNull null
@@ -598,13 +605,13 @@ class Nube(private val context: Context, db: BaseDatos, private val caja: CajaFu
     private suspend fun limpiarViejos(u: Usuario) {
         if (u.invitado || u.invernadero.isEmpty()) return
         val base = "invernaderos/${u.invernadero}"
-        val corte = System.currentTimeMillis() - DIAS_EN_NUBE * 86_400_000L
+        val corte = Reloj.ahora() - DIAS_EN_NUBE * 86_400_000L
         for (nodo in listOf("resumenes", "alertas")) {
             val viejos = leerServidor(ref("$base/$nodo").orderByChild("ts").endAt(corte.toDouble()).limitToFirst(500))
             val borrar = viejos.children.mapNotNull { it.key }.associateWith { null }
             if (borrar.isNotEmpty()) ref("$base/$nodo").updateChildren(borrar).await()
         }
-        val semana = System.currentTimeMillis() - 7 * 86_400_000L
+        val semana = Reloj.ahora() - 7 * 86_400_000L
         val pases = leerServidor(ref("$base/pases"))
         val vencidos = pases.children.filter { (it.child("vence").getValue(Long::class.java) ?: 0L) < semana }.mapNotNull { it.key }.toSet()
         if (vencidos.isEmpty()) return
