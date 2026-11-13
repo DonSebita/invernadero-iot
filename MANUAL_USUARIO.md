@@ -1,7 +1,7 @@
 # GreenBox — Manual de usuario
 
 > Manual vivo: se actualiza cuando cambia algo que el usuario ve o que afecta la seguridad.
-> Última actualización: 2026-11-12 · Versión de la app: 1.0 (base de datos v3)
+> Última actualización: 2026-11-13 · Versión de la app: 1.0 (base de datos v3)
 
 GreenBox es una app Android para monitorear y controlar un invernadero conectado a un ESP32:
 temperatura, humedad del suelo y del aire, ventilador y ventana. Funciona de forma **híbrida**:
@@ -20,9 +20,11 @@ temperatura, humedad del suelo y del aire, ventilador y ventana. Funciona de for
      con letras y números, que no contenga tu nombre. Te llegará un correo para confirmar tu dirección.
    - **Continuar con Google:** eliges tu cuenta de Google y listo.
    La primera vez necesitas Internet. Al crear la cuenta se crea también **tu invernadero en la nube**.
-3. Al entrar se abre siempre **Monitoreo**. La app parte en modo **Simulador** para probar sin hardware;
-   conecta el ESP32 cuando esté listo (ver sección 7) y vincúlalo a la nube (sección 7, *Nube*).
-4. **En otro teléfono** entra con la misma cuenta: verás tu invernadero desde la nube sin configurar nada.
+3. Al entrar se abre siempre **Monitoreo**. Mientras no configures el ESP32 en este teléfono, la app muestra
+   el **Simulador** (datos de demostración) y avisa arriba: *Datos de demostración: aún no configuras tu ESP32*
+   con el botón **Configurar**, que lleva a Ajustes (ver sección 7).
+4. **En otro teléfono** entra con la misma cuenta y elige **WiFi + nube** en Ajustes: lejos del invernadero
+   verás lo que el ESP32 sube a la nube.
 
 ---
 
@@ -86,7 +88,11 @@ de la caja** (si el sensor la entrega), ventilador y ventana. Botones **Día / T
   moverla*. Aparece las primeras 4 veces mientras no hayas movido ninguna y después de vez en cuando
   (una de cada 10 veces que abres Monitoreo); se va sola a los pocos segundos o al tocar la pantalla.
 - Los paneles que se abren son un poco translúcidos, para no perder de vista la escena.
-- Si no hay conexión local con el ESP32, Monitoreo muestra lo último que llegó desde la nube.
+- **La caja se ve siempre**, aunque no haya datos: mientras se conecta, las tarjetas dicen *Cargando…*; si la
+  conexión falla dicen *Error*.
+- **Aviso bajo la barra superior** (solo cuando hace falta): *Datos de demostración / Modo demostración*
+  (botón **Configurar** o **Cambiar**), *Mirando desde la nube · hace X min*, *Error: …* con el motivo, o
+  *Sin conexión con el ESP32* (lo que ves puede estar desactualizado).
 - **Hoja con número** (esquina inferior izquierda): cuántas plantas hay. Al tocarla se ve cada planta con su
   humedad de tierra y su estado, y con el lápiz le pones **nombre** (máx. 24 letras; ej. *Tomate cherry*).
   El nombre se guarda en este teléfono, queda en el registro de actividad y aparece en el Historial.
@@ -220,13 +226,14 @@ Detalle técnico y referencias ISO 27001 / 27400 / IEC 62443: ver `LEEME.md`.
 
 Ajustes → **Conexión inalámbrica** (cualquier cuenta; los invitados no):
 
-| Modo | Cuándo usarlo |
+| Modo (en este orden) | Cuándo usarlo |
 |---|---|
-| **Simulador** | Pruebas sin hardware (1 a 8 sensores simulados) |
-| **WiFi → ESP32** | Teléfono y ESP32 en la misma red; escribe la IP fija del ESP32 |
-| **Bluetooth → ESP32** | Sin router, a menos de ~10 m; empareja antes el ESP32 en Ajustes del teléfono |
-| **Otro teléfono (central)** | Este teléfono recibe los datos de otro que está conectado al ESP32 |
-| **Desde la nube** | Lejos del invernadero: lo último que subió el ESP32 (cada 2 min). Solo mirar. Es el modo con que parte un teléfono donde nunca configuraste la conexión |
+| **WiFi + nube** | El modo normal. En la red del invernadero: tiempo real (cada 2 s) y controles. Lejos: lo que el ESP32 sube a Firebase (cada 2 min), solo mirar. Escribe la IP fija del ESP32 |
+| **Bluetooth → ESP32** | Sin router, a menos de ~10 m; empareja antes el ESP32 en Ajustes del teléfono. Si se corta, también muestra la nube |
+| **Otro teléfono (central)** | Un segundo teléfono en la misma red WiFi recibe los datos de otro que ya está conectado al ESP32 (útil con Bluetooth, que acepta un solo teléfono a la vez) |
+| **Simulador (demostración)** | Datos de prueba, sin ESP32 (1 a 8 sensores). Es el modo inicial hasta que configures tu ESP32 |
+
+Los invitados que entran desde su propio teléfono no configuran nada: ven lo que hay en la nube.
 
 - La **clave compartida** (mín. 12 caracteres) debe ser igual en el ESP32 (`SECRETO`) y en todos los teléfonos.
 - **Compartir con otros teléfonos** convierte este teléfono en *central* (máx. 5 remotos). Los remotos
@@ -297,3 +304,4 @@ Ajustes → **Conexión inalámbrica** (cualquier cuenta; los invitados no):
 | 2026-11-12 | Monitoreo: animales que pasean por las colinas del fondo y aves que cruzan el cielo |
 | 2026-11-12 | Monitoreo: caja al centro; animales también en la colina cercana; aviso animado para mover las tarjetas; botón + para añadir o quitar plantas (máx. 12) |
 | 2026-11-12 | **Nube con Firebase (modelo híbrido):** cuentas con correo o Google en todos tus teléfonos (recuperación por correo, sin semilla); pases de visita en la nube (clave de 12 caracteres, en el teléfono del invitado); modo *Desde la nube* y respaldo automático; Ajustes → Nube con *Vincular ESP32*; Historial completado con resúmenes de la nube y avisos del ESP32 |
+| 2026-11-13 | Sin configurar, la app parte en el Simulador con el aviso *Configurar*; la caja de Monitoreo se ve siempre, con *Cargando…* o *Error* en las tarjetas y un aviso del estado de la conexión; modos de conexión en orden WiFi + nube, Bluetooth, Otro teléfono, Simulador |

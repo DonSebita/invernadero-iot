@@ -112,6 +112,8 @@ import androidx.compose.ui.unit.sp
 import com.invernadero.Contenedor
 import com.invernadero.conexion.Comandos
 import com.invernadero.conexion.EstadoConexion
+import com.invernadero.conexion.haceCuanto
+import com.invernadero.datos.ModoConexion
 import com.invernadero.conexion.LecturaEsp32
 import com.invernadero.ui.FuenteTexto
 import com.invernadero.ui.FuenteTitulos
@@ -143,8 +145,9 @@ class ZonaToque(val parametro: Parametro, val area: Rect)
 //  Pantalla de MONITOREO: caja 3D animada con los datos en vivo
 // ─────────────────────────────────────────────────────────────
 @Composable
-fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean) -> Unit) {
+fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean) -> Unit, alConfigurar: () -> Unit = {}) {
     val lectura by c.conexion.lectura.collectAsState()
+    val estado by c.conexion.estado.collectAsState()
     val usuario by c.sesion.usuario.collectAsState()
     val nombres by c.plantas.nombres.collectAsState()
     val esperando by c.plantas.esperando.collectAsState()
@@ -218,9 +221,25 @@ fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean
             verticalArrangement = Arrangement.spacedBy(if (apaisado) 4.dp else 8.dp)
         ) {
             BarraSuperior(paleta, modoTarde, alCambiarModo)
+
+            // Qué pasa con los datos: demostración, nube, cargando o error (la caja se ve igual)
+            val esInvitado = usuario?.invitado == true
+            val falla = lectura == null && estado.fallas > 0 && estado.mensaje != null
+            val configurar = if (esInvitado) null else "Configurar" to alConfigurar
+            when {
+                estado.sinConfigurar -> AvisoConexion("Datos de demostración: aún no configuras tu ESP32.", false, paleta, configurar)
+                estado.modo == ModoConexion.SIMULADOR -> AvisoConexion("Modo demostración: estos datos son simulados.", false, paleta, "Cambiar" to alConfigurar)
+                estado.desdeNube && estado.conectado -> AvisoConexion("Mirando desde la nube · ${haceCuanto(estado.nubeTs)} (solo mirar)", false, paleta, null)
+                estado.desdeNube -> AvisoConexion(estado.mensaje ?: "La nube no recibe datos del ESP32", true, paleta, null)
+                falla -> AvisoConexion("Error: ${estado.mensaje}", true, paleta, configurar)
+                lectura != null && !estado.conectado ->
+                    AvisoConexion("Sin conexión con el ESP32 (${estado.mensaje ?: "sin datos"}). Lo que ves puede estar desactualizado.", true, paleta, null)
+            }
+
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 EscenaInvernadero(
                     lectura = lectura,
+                    sinDato = if (falla) "Error" else "Cargando…",
                     plantas = plantas.map { it.humedad },
                     tiempo = tiempo,
                     aspas = aspas,
@@ -256,6 +275,25 @@ fun PantallaMonitoreo(c: Contenedor, modoTarde: Boolean, alCambiarModo: (Boolean
                 }
             }
         }
+    }
+}
+
+/** Franja bajo la barra superior: avisa si los datos son de demostración, de la nube o si hay un error. */
+@Composable
+private fun AvisoConexion(texto: String, error: Boolean, p: Paleta, accion: Pair<String, () -> Unit>?) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(p.tarjeta)
+            .padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+            .heightIn(min = 44.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            texto,
+            color = if (error) MaterialTheme.colorScheme.error else p.texto,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f).padding(vertical = 6.dp)
+        )
+        accion?.let { (etiqueta, alPulsar) -> TextButton(onClick = alPulsar) { Text(etiqueta, color = p.verde) } }
     }
 }
 
@@ -586,6 +624,7 @@ private class Tarjeta(
 @Composable
 private fun EscenaInvernadero(
     lectura: LecturaEsp32?,
+    sinDato: String,                 // lo que muestran las tarjetas si aún no hay datos: "Cargando…" o "Error"
     plantas: List<Float?>,
     tiempo: State<Float>,
     aspas: State<Float>,
@@ -651,13 +690,7 @@ private fun EscenaInvernadero(
                 )
             }
     ) {
-        if (lectura == null) {
-            zonas.clear()
-            arrastrables.clear()
-            val txt = medidor.measure("Esperando datos…", TextStyle(color = paleta.texto, fontSize = 16.sp, fontFamily = FuenteTexto))
-            drawText(txt, topLeft = center - Offset(txt.size.width / 2f, txt.size.height / 2f))
-            return@Canvas
-        }
+        // Sin datos la caja se dibuja igual (ventilador quieto, ventana cerrada) y las tarjetas dicen "Cargando…" o "Error"
         // La caja queda al centro y deja ver el paisaje alrededor (~2/3 del ancho útil);
         // apenas a la derecha porque la ventana abierta sobresale a la izquierda.
         // En horizontal la escena es baja y ancha: las tarjetas van a los costados
@@ -671,7 +704,7 @@ private fun EscenaInvernadero(
             cam,
             DatosEscena(
                 humedades = plantas,
-                temperatura = lectura.temperatura,
+                temperatura = lectura?.temperatura ?: 20f,
                 velocidadVentilador = velocidad.value,
                 anguloAspas = aspas.value,
                 anguloVentana = anguloVentana.value,
@@ -682,15 +715,18 @@ private fun EscenaInvernadero(
 
         // La humedad del aire se mide "en el aire" de la caja: el punto flota arriba, sobre las plantas
         val anclaAire = cam.proyectar(Vec3(0.22f, 0.30f, -0.18f))
+        val l = lectura
         val tarjetas = listOfNotNull(
-            Tarjeta(Parametro.Ventana, "ventana", anclas.ventana, "${lectura.anguloVentana.roundToInt()}°",
-                "Ventana · ${lectura.modoVentana.lowercase()}", columnaIzquierda = true, ladoPreferido = Lado.IZQ),
-            Tarjeta(Parametro.Temperatura, "temperatura", anclas.temperatura, "%.1f °C".format(lectura.temperatura),
+            Tarjeta(Parametro.Ventana, "ventana", anclas.ventana, l?.let { "${it.anguloVentana.roundToInt()}°" } ?: sinDato,
+                l?.let { "Ventana · ${it.modoVentana.lowercase()}" } ?: "Ventana", columnaIzquierda = true, ladoPreferido = Lado.IZQ),
+            Tarjeta(Parametro.Temperatura, "temperatura", anclas.temperatura, l?.let { "%.1f °C".format(it.temperatura) } ?: sinDato,
                 "Temperatura", columnaIzquierda = true),
             Tarjeta(Parametro.Ventilador, "ventilador", anclas.ventilador,
-                if (lectura.ventiladorEncendido) "${(lectura.velocidadVentilador * 100).roundToInt()}%" else "OFF",
-                "Ventilador · ${lectura.modoVentilador.lowercase()}", columnaIzquierda = false, ladoPreferido = Lado.DER),
-            lectura.humedadAmbiente?.let {
+                l?.let { if (it.ventiladorEncendido) "${(it.velocidadVentilador * 100).roundToInt()}%" else "OFF" } ?: sinDato,
+                l?.let { "Ventilador · ${it.modoVentilador.lowercase()}" } ?: "Ventilador", columnaIzquierda = false, ladoPreferido = Lado.DER),
+            if (l == null) {
+                Tarjeta(Parametro.HumedadAire, "humedadAire", anclaAire, sinDato, "Humedad del aire", columnaIzquierda = false)
+            } else l.humedadAmbiente?.let {
                 Tarjeta(Parametro.HumedadAire, "humedadAire", anclaAire, "${it.roundToInt()}%", "Humedad del aire", columnaIzquierda = false)
             },
         )

@@ -148,7 +148,7 @@ private fun PantallaConMenu(c: Contenedor, u: Usuario, modoTarde: Boolean, alCam
     }
     val pantallas: @Composable (Modifier) -> Unit = { modificador ->
         NavHost(nav, startDestination = "monitoreo", modifier = modificador) {
-            composable("monitoreo") { PantallaMonitoreo(c, modoTarde, alCambiarModo) }
+            composable("monitoreo") { PantallaMonitoreo(c, modoTarde, alCambiarModo) { ir(destinos[3]) } }
             composable("controles") { PantallaControles(c, u) }
             composable("historial") { PantallaHistorial(c) { nav.navigate("registro") } }
             composable("registro") { PantallaRegistro(c) { nav.popBackStack() } }

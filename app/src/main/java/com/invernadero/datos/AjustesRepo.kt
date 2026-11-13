@@ -2,12 +2,16 @@ package com.invernadero.datos
 
 import com.invernadero.seguridad.CajaFuerte
 
+/** En este orden aparecen en Ajustes. NUBE no se ofrece: es el modo interno de los invitados en su propio teléfono. */
 enum class ModoConexion(val etiqueta: String, val ayuda: String) {
-    SIMULADOR("Simulador", "Datos de prueba, sin hardware"),
-    WIFI("WiFi → ESP32", "Misma red WiFi que el ESP32 (más alcance, varios teléfonos)"),
-    BLUETOOTH("Bluetooth → ESP32", "Directo y sin router (corto alcance, ~10 m)"),
-    REMOTO("Otro teléfono (central)", "Recibe los datos desde el teléfono central por WiFi"),
-    NUBE("Desde la nube", "Lo último que subió el ESP32 a Firebase (cada 2 min), desde cualquier lugar. Solo mirar")
+    WIFI("WiFi + nube", "En la red del invernadero ves todo al instante (cada 2 s). Lejos de ella, lo que el ESP32 sube a Firebase (cada 2 min)"),
+    BLUETOOTH("Bluetooth → ESP32", "Directo y sin router (corto alcance, ~10 m). Si se corta, también muestra la nube"),
+    REMOTO("Otro teléfono (central)", "Recibe los datos de otro teléfono que ya está conectado al ESP32, por la misma red WiFi"),
+    SIMULADOR("Simulador (demostración)", "Datos de prueba, sin ESP32. Es el modo inicial hasta que configures tu ESP32"),
+    NUBE("Desde la nube", "Lo último que subió el ESP32 a Firebase (cada 2 min). Solo mirar");
+
+    /** Modos que el usuario puede elegir en Ajustes. */
+    companion object { val elegibles get() = entries.filter { it != NUBE } }
 }
 
 data class ConfigConexion(

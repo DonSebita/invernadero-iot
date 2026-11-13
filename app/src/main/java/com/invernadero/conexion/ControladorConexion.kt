@@ -43,6 +43,7 @@ data class EstadoConexion(
     val telefonosConectados: Int = 0,
     val compartiendo: Boolean = false,
     val desdeNube: Boolean = false,      // lo que se ve viene de Firebase (solo mirar)
+    val sinConfigurar: Boolean = false,  // nunca se configuró el ESP32 en este teléfono: se muestra el simulador
     val nubeTs: Long = 0L,               // cuándo subió el ESP32 ese dato
     val desde: Long = System.currentTimeMillis()
 )
@@ -106,8 +107,15 @@ class ControladorConexion(
     fun reiniciar(config: ConfigConexion = ajustes.cargar()) {
         detener()
         val invernadero = sesion.usuario.value?.invernadero?.takeIf { it.isNotEmpty() }
-        // Un teléfono donde nunca se configuró la conexión (otro teléfono tuyo, o el de un invitado) mira desde la nube
-        val modo = if (!ajustes.configurado && invernadero != null) ModoConexion.NUBE else config.modo
+        // Sin configurar, la app parte en el simulador y avisa que falta configurar el ESP32.
+        // Un invitado en su propio teléfono no puede configurar nada: mira lo que hay en la nube.
+        val invitado = sesion.usuario.value?.invitado == true
+        val sinConfigurar = !ajustes.configurado
+        val modo = when {
+            sinConfigurar && invitado && invernadero != null -> ModoConexion.NUBE
+            sinConfigurar -> ModoConexion.SIMULADOR
+            else -> config.modo
+        }
         val nueva: FuenteEsp32 = when (modo) {
             ModoConexion.SIMULADOR -> SimuladorEsp32(config.sensoresSimulados)
             ModoConexion.WIFI -> Esp32Wifi(config.ipEsp32.trim(), config.secreto)
@@ -120,7 +128,10 @@ class ControladorConexion(
         val compartir = config.compartir && modo != ModoConexion.REMOTO && modo != ModoConexion.NUBE
         // Respaldo: con WiFi, Bluetooth o central, si no llegan datos locales se muestra la nube
         val respaldo = invernadero != null && modo != ModoConexion.SIMULADOR && modo != ModoConexion.NUBE
-        _estado.value = EstadoConexion(modo = modo, descripcion = nueva.nombre, mensaje = "Conectando…", compartiendo = compartir)
+        _estado.value = EstadoConexion(
+            modo = modo, descripcion = nueva.nombre, mensaje = "Conectando…", compartiendo = compartir,
+            sinConfigurar = sinConfigurar && !invitado
+        )
 
         trabajo = scope.launch {
             if (compartir) {

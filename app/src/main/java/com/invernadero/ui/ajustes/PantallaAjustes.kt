@@ -62,11 +62,7 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val estado by c.conexion.estado.collectAsState()
-    // En un teléfono donde nunca se configuró la conexión, la app ya está mirando desde la nube
-    var cfg by remember {
-        val guardada = c.ajustes.cargar()
-        mutableStateOf(if (!c.ajustes.configurado && u.invernadero.isNotEmpty()) guardada.copy(modo = ModoConexion.NUBE) else guardada)
-    }
+    var cfg by remember { mutableStateOf(c.ajustes.cargar()) }
     var verClave by remember { mutableStateOf(false) }
     var buscando by remember { mutableStateOf(false) }
 
@@ -142,7 +138,7 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                 Text("Estado: ${estado.textoCorto()}", style = MaterialTheme.typography.bodySmall)
 
                 Column(Modifier.selectableGroup()) {
-                    ModoConexion.entries.forEach { m ->
+                    ModoConexion.elegibles.forEach { m ->
                         OpcionRadio(m.etiqueta, cfg.modo == m, admin, m.ayuda) { cfg = cfg.copy(modo = m) }
                     }
                 }
@@ -157,13 +153,21 @@ fun PantallaAjustes(c: Contenedor, u: Usuario) {
                             valueRange = 1f..8f, steps = 6, enabled = admin
                         )
                     }
-                    ModoConexion.WIFI -> OutlinedTextField(
-                        value = cfg.ipEsp32, onValueChange = { cfg = cfg.copy(ipEsp32 = it.take(15)) },
-                        label = { Text("IP del ESP32") }, singleLine = true, enabled = admin,
-                        supportingText = { Text("La misma IP fija del sketch y de network_security_config.xml") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    ModoConexion.WIFI -> {
+                        OutlinedTextField(
+                            value = cfg.ipEsp32, onValueChange = { cfg = cfg.copy(ipEsp32 = it.take(15)) },
+                            label = { Text("IP del ESP32") }, singleLine = true, enabled = admin,
+                            supportingText = { Text("La misma IP fija del sketch y de network_security_config.xml") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "Nube: el ESP32 sube a Firebase un estado cada 2 min y un resumen cada 5. Fuera de la red del " +
+                                "invernadero la app lo muestra sola (solo mirar). Vincúlalo en la sección Nube, más abajo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     ModoConexion.BLUETOOTH -> OutlinedTextField(
                         value = cfg.nombreBt, onValueChange = { cfg = cfg.copy(nombreBt = it.take(30)) },
                         label = { Text("Nombre Bluetooth del ESP32") }, singleLine = true, enabled = admin,
