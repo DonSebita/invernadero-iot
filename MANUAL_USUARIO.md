@@ -106,8 +106,8 @@ de la caja** (si el sensor la entrega), ventilador y ventana. Botones **Día / T
 - Los controles responden al instante: muestran lo que pediste mientras el ESP32 lo confirma (unos 2 s).
 
 El fondo cubre toda la pantalla, también detrás de la barra de estado y la cámara, con colinas, árboles,
-pinos, arbustos y pasto que se mecen con la brisa. Por las colinas, de lejos y de cerca, pasean ciervos, zorros
-y conejos (de vez en cuando se detienen a pastar, olfatear o mirar) y por el cielo cruzan bandadas de aves. Es solo
+pinos, arbustos y pasto que se mecen con la brisa. Por las colinas, de lejos y de cerca, pasean ciervos, zorros,
+conejos, vacas y ovejas (de vez en cuando se detienen a pastar, olfatear o mirar) y por el cielo cruzan bandadas de aves. Es solo
 decorativo: no depende de los datos del invernadero.
 
 **Con el teléfono en horizontal** (o en tablet) el menú pasa a un riel a la izquierda, la caja queda al centro
@@ -305,3 +305,4 @@ Los invitados que entran desde su propio teléfono no configuran nada: ven lo qu
 | 2026-11-12 | Monitoreo: caja al centro; animales también en la colina cercana; aviso animado para mover las tarjetas; botón + para añadir o quitar plantas (máx. 12) |
 | 2026-11-12 | **Nube con Firebase (modelo híbrido):** cuentas con correo o Google en todos tus teléfonos (recuperación por correo, sin semilla); pases de visita en la nube (clave de 12 caracteres, en el teléfono del invitado); modo *Desde la nube* y respaldo automático; Ajustes → Nube con *Vincular ESP32*; Historial completado con resúmenes de la nube y avisos del ESP32 |
 | 2026-11-13 | Sin configurar, la app parte en el Simulador con el aviso *Configurar*; la caja de Monitoreo se ve siempre, con *Cargando…* o *Error* en las tarjetas y un aviso del estado de la conexión; modos de conexión en orden WiFi + nube, Bluetooth, Otro teléfono, Simulador |
+| 2026-11-13 | Monitoreo: vacas y ovejas en las colinas del fondo |

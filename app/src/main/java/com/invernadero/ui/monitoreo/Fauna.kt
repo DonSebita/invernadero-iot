@@ -1,6 +1,9 @@
 package com.invernadero.ui.monitoreo
 
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -8,6 +11,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp
@@ -27,7 +31,7 @@ import kotlin.math.sin
 private const val GRADOS = 180f / PI.toFloat()
 private val SILUETA = Color(0xFF2E1C26)      // al atardecer los animales se ven casi a contraluz
 
-internal enum class Especie { CIERVO, ZORRO, CONEJO }
+internal enum class Especie { CIERVO, ZORRO, CONEJO, VACA, OVEJA }
 
 /**
  * Un animal que pasea por una colina y da la vuelta a la pantalla.
@@ -46,12 +50,15 @@ internal class Animal(
 
 internal val ANIMALES_LEJOS = listOf(
     Animal(Especie.CIERVO, 0.60f, 0.22f, -1f, 0.30f, 14f, 6f),
+    Animal(Especie.OVEJA, 0.36f, 0.18f, 1f, 0.70f, 6f, 8f),
 )
 
 internal val ANIMALES_MEDIO = listOf(
     Animal(Especie.CIERVO, 0.62f, 0.30f, 1f, 0.05f, 9f, 5f),
     Animal(Especie.ZORRO, 0.34f, 0.55f, -1f, 0.55f, 7f, 3f),
     Animal(Especie.CONEJO, 0.22f, 0.70f, 1f, 0.78f, 3f, 4f),
+    Animal(Especie.VACA, 0.55f, 0.18f, -1f, 0.25f, 8f, 9f),
+    Animal(Especie.OVEJA, 0.32f, 0.30f, 1f, 0.62f, 5f, 6f),
 )
 
 /** En la colina más cercana: más grandes y con todo su color. */
@@ -59,6 +66,10 @@ internal val ANIMALES_CERCA = listOf(
     Animal(Especie.CONEJO, 0.20f, 0.75f, -1f, 0.15f, 2.5f, 5f),
     Animal(Especie.ZORRO, 0.30f, 0.50f, 1f, 0.40f, 8f, 4f),
     Animal(Especie.CIERVO, 0.50f, 0.28f, -1f, 0.85f, 11f, 7f),
+    Animal(Especie.VACA, 0.48f, 0.16f, 1f, 0.60f, 9f, 10f),
+    // Dos ovejas juntas, como un pequeño rebaño
+    Animal(Especie.OVEJA, 0.30f, 0.26f, -1f, 0.30f, 6f, 7f),
+    Animal(Especie.OVEJA, 0.26f, 0.26f, -1f, 0.33f, 6f, 7f),
 )
 
 private class Pelaje(val base: Color, val oscuro: Color, val claro: Color)
@@ -67,6 +78,8 @@ private fun pelajeDe(e: Especie) = when (e) {
     Especie.CIERVO -> Pelaje(Color(0xFF9C6B45), Color(0xFF5D3D27), Color(0xFFF1E3CF))
     Especie.ZORRO -> Pelaje(Color(0xFFD9772E), Color(0xFF4A2A1A), Color(0xFFFFF3E3))
     Especie.CONEJO -> Pelaje(Color(0xFFA89584), Color(0xFF5E4F44), Color(0xFFFFFFFF))
+    Especie.VACA -> Pelaje(Color(0xFFF4F1EA), Color(0xFF2B2522), Color(0xFFF2A8A0))
+    Especie.OVEJA -> Pelaje(Color(0xFFF2EEE4), Color(0xFF3A3330), Color(0xFFD6CFC0))
 }
 
 /**
@@ -123,6 +136,8 @@ internal fun DrawScope.dibujarAnimales(
                 Especie.CIERVO -> dibujarCiervo(pie, alto, pasos, ritmo, t + i, pel)
                 Especie.ZORRO -> dibujarZorro(pie, alto, pasos, ritmo, t + i, pel)
                 Especie.CONEJO -> dibujarConejo(pie, alto, pasos, ritmo, t + i, pel)
+                Especie.VACA -> dibujarVaca(pie, alto, pasos, ritmo, t + i, pel)
+                Especie.OVEJA -> dibujarOveja(pie, alto, pasos, ritmo, t + i, pel)
             }
         }
     }
@@ -246,6 +261,81 @@ private fun DrawScope.dibujarConejo(p: Offset, s: Float, pasos: Float, ritmo: Fl
     rotate(-24f + tic, cabeza) { drawOval(c.base, Offset(cabeza.x - s * 0.07f, cabeza.y - s * 0.50f), Size(s * 0.13f, s * 0.44f)) }
     drawCircle(c.base, s * 0.17f, cabeza)
     drawCircle(c.oscuro, s * 0.03f, Offset(cabeza.x + s * 0.07f, cabeza.y - s * 0.03f))
+}
+
+/** Vaca blanca con manchas negras; quieta, baja la cabeza a pastar y mueve la cola. */
+private fun DrawScope.dibujarVaca(p: Offset, s: Float, pasos: Float, ritmo: Float, t: Float, c: Pelaje) {
+    val cuerpoY = p.y - s * 0.62f - abs(sin(pasos)) * s * 0.01f * ritmo
+    val amp = 0.28f * ritmo
+    val grosor = s * 0.09f
+    val pi = PI.toFloat()
+    val lejana = lerp(c.base, c.oscuro, 0.3f)
+
+    pata(Offset(p.x - s * 0.36f, cuerpoY + s * 0.10f), p.y, sin(pasos) * amp, grosor, lejana)
+    pata(Offset(p.x + s * 0.26f, cuerpoY + s * 0.10f), p.y, sin(pasos + pi) * amp, grosor, lejana)
+
+    // Cola con mechón
+    val vaiven = sin(t * 1.8f) * s * 0.05f
+    val puntaCola = Offset(p.x - s * 0.58f + vaiven, cuerpoY + s * 0.24f)
+    drawLine(c.base, Offset(p.x - s * 0.50f, cuerpoY - s * 0.14f), puntaCola, s * 0.025f, StrokeCap.Round)
+    drawCircle(c.oscuro, s * 0.04f, puntaCola)
+
+    val cuerpo = Path().apply {
+        addRoundRect(RoundRect(p.x - s * 0.52f, cuerpoY - s * 0.20f, p.x + s * 0.42f, cuerpoY + s * 0.18f, CornerRadius(s * 0.16f)))
+    }
+    drawPath(cuerpo, c.base)
+    clipPath(cuerpo) {
+        drawOval(c.oscuro, Offset(p.x - s * 0.36f, cuerpoY - s * 0.24f), Size(s * 0.30f, s * 0.22f))
+        drawOval(c.oscuro, Offset(p.x + s * 0.04f, cuerpoY - s * 0.04f), Size(s * 0.24f, s * 0.26f))
+        drawOval(c.oscuro, Offset(p.x - s * 0.56f, cuerpoY + s * 0.02f), Size(s * 0.16f, s * 0.18f))
+    }
+    drawOval(c.claro, Offset(p.x - s * 0.24f, cuerpoY + s * 0.12f), Size(s * 0.16f, s * 0.10f))   // ubre
+
+    pata(Offset(p.x - s * 0.30f, cuerpoY + s * 0.10f), p.y, sin(pasos + pi) * amp, grosor, c.base)
+    pata(Offset(p.x + s * 0.32f, cuerpoY + s * 0.10f), p.y, sin(pasos) * amp, grosor, c.base)
+
+    val baja = (1f - ritmo) * (sin(t * 0.6f) * 1.5f + 0.9f).coerceIn(0f, 1f)
+    val cabeza = lerpOffset(
+        Offset(p.x + s * 0.54f, cuerpoY - s * 0.22f + sin(pasos * 2f) * s * 0.01f * ritmo),
+        Offset(p.x + s * 0.60f, p.y - s * 0.12f),
+        baja
+    )
+    drawLine(c.base, Offset(p.x + s * 0.34f, cuerpoY - s * 0.06f), cabeza, s * 0.20f, StrokeCap.Round)
+    drawOval(c.base, Offset(cabeza.x - s * 0.18f, cabeza.y - s * 0.11f), Size(s * 0.12f, s * 0.06f))   // oreja
+    drawOval(c.base, Offset(cabeza.x - s * 0.10f, cabeza.y - s * 0.09f), Size(s * 0.24f, s * 0.17f))
+    drawOval(c.oscuro, Offset(cabeza.x - s * 0.09f, cabeza.y - s * 0.09f), Size(s * 0.12f, s * 0.09f))
+    drawOval(c.claro, Offset(cabeza.x + s * 0.06f, cabeza.y - s * 0.02f), Size(s * 0.11f, s * 0.10f))   // hocico
+}
+
+/** Oveja: lana esponjosa (varios círculos), cara y patas oscuras; quieta, pasta. */
+private fun DrawScope.dibujarOveja(p: Offset, s: Float, pasos: Float, ritmo: Float, t: Float, c: Pelaje) {
+    val cuerpoY = p.y - s * 0.58f - abs(sin(pasos)) * s * 0.02f * ritmo
+    val amp = 0.35f * ritmo
+    val grosor = s * 0.06f
+    val pi = PI.toFloat()
+
+    pata(Offset(p.x - s * 0.22f, cuerpoY + s * 0.10f), p.y, sin(pasos) * amp, grosor, c.oscuro)
+    pata(Offset(p.x + s * 0.20f, cuerpoY + s * 0.10f), p.y, sin(pasos + pi) * amp, grosor, c.oscuro)
+
+    val baja = (1f - ritmo) * (sin(t * 0.8f) * 1.5f + 0.9f).coerceIn(0f, 1f)
+    val cabeza = lerpOffset(Offset(p.x + s * 0.40f, cuerpoY - s * 0.16f), Offset(p.x + s * 0.46f, p.y - s * 0.10f), baja)
+    drawLine(c.oscuro, Offset(p.x + s * 0.24f, cuerpoY - s * 0.04f), cabeza, s * 0.10f, StrokeCap.Round)
+
+    fun lana(dy: Float) = Path().apply {
+        for ((dx, oy, r) in listOf(
+            Triple(-0.28f, -0.02f, 0.17f), Triple(-0.10f, -0.11f, 0.19f), Triple(0.10f, -0.10f, 0.19f),
+            Triple(0.26f, -0.02f, 0.16f), Triple(0f, 0.06f, 0.20f), Triple(-0.20f, 0.08f, 0.15f), Triple(0.20f, 0.08f, 0.15f)
+        )) addOval(Rect(Offset(p.x + dx * s, cuerpoY + oy * s + dy), r * s))
+    }
+    drawPath(lana(s * 0.03f), c.claro)   // sombra de la lana
+    drawPath(lana(0f), c.base)
+
+    pata(Offset(p.x - s * 0.16f, cuerpoY + s * 0.12f), p.y, sin(pasos + pi) * amp, grosor, c.oscuro)
+    pata(Offset(p.x + s * 0.24f, cuerpoY + s * 0.12f), p.y, sin(pasos) * amp, grosor, c.oscuro)
+
+    rotate(25f, cabeza) { drawOval(c.oscuro, Offset(cabeza.x - s * 0.15f, cabeza.y - s * 0.04f), Size(s * 0.10f, s * 0.045f)) }
+    drawOval(c.oscuro, Offset(cabeza.x - s * 0.08f, cabeza.y - s * 0.08f), Size(s * 0.20f, s * 0.14f))
+    drawCircle(c.base, s * 0.07f, Offset(cabeza.x - s * 0.04f, cabeza.y - s * 0.08f))   // copete de lana
 }
 
 // ─────────────────────────────────────────────────────────────
